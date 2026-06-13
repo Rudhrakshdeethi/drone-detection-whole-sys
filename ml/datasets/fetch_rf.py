@@ -5,11 +5,12 @@ is a PyTorch .pt dict: {'x_iq': [2 x N] real/imag, 'y': class idx, 'snr': dB}.
 Class names come from class_stats.csv; the 'Noise' class -> our noise folder,
 every drone class -> our drone folder. Output: dataset/{drone,noise}/*.bin
 
-    python -m ml.datasets.fetch_rf                  # download + adapt (Kaggle token needed)
+    python -m ml.datasets.fetch_rf                  # download/adapt
     python -m ml.datasets.fetch_rf --max-per-class 150
 
-Needs a Kaggle API token — see ml/datasets/kaggle_helper.py. Falls back to a
-clear message (mock data keeps working) if no token.
+NO Kaggle API token required: either drop the manually-downloaded .zip into
+dataset/_raw/rf_v2/ and re-run, or use a token. See ml/datasets/kaggle_helper.py.
+Falls back to a clear message (mock data keeps working) if data is missing.
 """
 from __future__ import annotations
 import os, sys, argparse
@@ -44,9 +45,10 @@ def main():
 
     import torch  # the .pt files need torch to load
 
-    if not os.path.isdir(RAW) or not os.listdir(RAW):
-        if not download_dataset(SLUG, RAW, unzip=True):
-            sys.exit(1)
+    # Ensures data is present: uses an already-extracted copy, a manually
+    # downloaded .zip dropped into RAW (no token), or the Kaggle API.
+    if not download_dataset(SLUG, RAW, unzip=True):
+        sys.exit(1)
 
     class_names = _load_class_names(RAW)
     if class_names:

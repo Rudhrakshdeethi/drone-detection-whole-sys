@@ -3,9 +3,10 @@
 Already in YOLO format (images + labels). This downloads it and writes/locates a
 data.yaml our trainer can use, then prints the train command.
 
-    python -m ml.datasets.fetch_vision      # Kaggle token needed
+    python -m ml.datasets.fetch_vision
 
-Needs a Kaggle API token — see ml/datasets/kaggle_helper.py.
+NO Kaggle API token required: either drop the manually-downloaded .zip into
+dataset/_raw/yolo_drone/ and re-run, or use a token. See ml/datasets/kaggle_helper.py.
 """
 from __future__ import annotations
 import os, sys, glob
@@ -19,9 +20,10 @@ RAW = os.path.join(DATASET_DIR, "_raw", "yolo_drone")
 
 
 def main():
-    if not os.path.isdir(RAW) or not os.listdir(RAW):
-        if not download_dataset(SLUG, RAW, unzip=True):
-            sys.exit(1)
+    # Ensures data is present: uses an already-extracted copy, a manually
+    # downloaded .zip dropped into RAW (no token), or the Kaggle API.
+    if not download_dataset(SLUG, RAW, unzip=True):
+        sys.exit(1)
 
     # Prefer a shipped data.yaml; else locate train/val image dirs.
     yamls = glob.glob(os.path.join(RAW, "**", "*.yaml"), recursive=True) + \
