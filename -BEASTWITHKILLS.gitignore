@@ -7,8 +7,12 @@ __pycache__/
 # ML artifacts & data (regenerable / large)
 dataset/
 models/
-reports/*.png
+reports/*
 !reports/.gitkeep
+
+# Kaggle credentials — never commit
+kaggle.json
+.kaggle/
 
 # YOLO / ultralytics
 runs/

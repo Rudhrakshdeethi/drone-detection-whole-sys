@@ -1,0 +1,4 @@
+timestamp,source,rf_label,rf_confidence,drone_prob,fingerprint,fingerprint_conf,wifi_ssids,unknown_model,duration_sec,threat_score,threat_level,modifiers
+2026-06-14 11:37:20,mock,drone,83.0,83.0,DJI_Mavic,66.7,,False,0.0,39.1,WATCH,
+2026-06-14 11:38:02,mock,drone,71.0,71.0,DJI_Mavic,60.4,DJI-Mavic-1A2B,False,0.0,36.8,WATCH,
+2026-06-14 11:38:13,mock,noise,100.0,0.0,,0.0,,True,0.0,15.0,SAFE,unknown model (+15)

@@ -1,0 +1,15 @@
+# Live runtime layer (ml/runtime/*) — on top of requirements-core.txt.
+#
+# These are the *real-hardware* extras for the Raspberry Pi deployment. None are
+# needed to run the loop in mock mode on a laptop (it degrades gracefully).
+#
+#   pip install -r requirements-core.txt -r requirements-runtime.txt
+#
+# Plus a system package for the SDR (not pip-installable):
+#   sudo apt install rtl-sdr        # provides the `rtl_sdr` / `rtl_power` CLIs
+# Wi-Fi scanning uses `nmcli` from NetworkManager (preinstalled on Raspberry Pi OS).
+
+requests        # Telegram Bot API alerts
+gpiozero        # GPIO 18 buzzer (Raspberry Pi)
+rpi.gpio        # gpiozero's default pin backend on the Pi
+# paho-mqtt     # optional: mirror detections onto the CampusShield MQTT bus
