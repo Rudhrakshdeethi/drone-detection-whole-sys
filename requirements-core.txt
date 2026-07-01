@@ -12,5 +12,3 @@ Pillow>=10.0
 tqdm>=4.66
 # optional: only needed if a live MQTT broker is running
 paho-mqtt>=1.6
-# real-dataset fetchers (A1 RF + A4 vision via Kaggle API)
-kaggle>=1.6
