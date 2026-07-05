@@ -9,7 +9,9 @@
 #   sudo apt install rtl-sdr        # provides the `rtl_sdr` / `rtl_power` CLIs
 # Wi-Fi scanning uses `nmcli` from NetworkManager (preinstalled on Raspberry Pi OS).
 
-requests        # Telegram Bot API alerts
-gpiozero        # GPIO 18 buzzer (Raspberry Pi)
+requests        # Telegram Bot API alerts + Kismet REST API + dump1090 ADS-B
+gpiozero        # GPIO 18 buzzer + SSR response layer (Raspberry Pi)
 rpi.gpio        # gpiozero's default pin backend on the Pi
+pyserial        # TF-Luna LiDAR (lidar.py) + SX1262 LoRa mesh (lora_mesh.py) UART
+# bleak         # optional: Bluetooth Remote ID scanning (ble_remoteid.py)
 # paho-mqtt     # optional: mirror detections onto the CampusShield MQTT bus

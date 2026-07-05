@@ -34,6 +34,8 @@ class ThreatInputs:
     bluetooth_conf: float = 0.0
     duration_sec: float = 0.0
     is_unknown: bool = False
+    remote_id_decoded: bool = False   # a drone broadcast its DJI/FAA Remote ID
+    aircraft_match: bool = False      # ADS-B says a manned aircraft is at that spot
 
 
 def compute_threat_score(inp: ThreatInputs | dict) -> dict:
@@ -54,6 +56,15 @@ def compute_threat_score(inp: ThreatInputs | dict) -> dict:
         score += 10; reasons.append("present >60s (+10)")
     if inp.is_unknown:
         score += 15; reasons.append("unknown model (+15)")
+    # A decoded Remote ID / DJI DroneID is near-certain proof a drone is present
+    # (it is literally transmitting its identity), so floor the score at WARNING
+    # regardless of how the other sensors happened to read this instant.
+    if inp.remote_id_decoded and score < 75:
+        score = 75.0; reasons.append("Remote ID decoded (floor 75)")
+    # ADS-B cross-check: a "drone" that coincides with a tracked manned aircraft
+    # is very likely a false positive — pull the score down.
+    if inp.aircraft_match:
+        score -= 20; reasons.append("manned aircraft nearby (-20)")
 
     score = min(100.0, max(0.0, score))
     for threshold, name, icon in LEVELS:

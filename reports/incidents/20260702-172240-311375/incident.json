@@ -1,0 +1,10 @@
+{
+  "timestamp": "2026-07-02T17:22:40",
+  "threat": "HIGH",
+  "score": 0.93,
+  "manufacturer": "DJI",
+  "model": "Mavic 3",
+  "serial": "SIM-1581F2E4A7B9",
+  "source": "kismet(mock)",
+  "recorded_at": "2026-07-02T17:22:40"
+}

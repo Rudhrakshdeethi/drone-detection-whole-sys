@@ -18,3 +18,5 @@ yolov8n.pt
 # OS
 .DS_Store
 Thumbs.db
+.playwright-mcp/
+reports/*.bak
