@@ -43,12 +43,34 @@ class AlertManager:
         self._buzzer_ready = False
         self._last_alert = 0.0
         self._csv_header_done = os.path.exists(self.cfg.csv_path)
+        self._schema_checked = False
 
     # ---- channel: CSV ---------------------------------------------------------
+    def _ensure_schema(self, keys: list[str]) -> None:
+        """If an existing CSV's header no longer matches (e.g. new Remote ID
+        columns were added), rotate it to `.bak` so rows never misalign under a
+        stale header. Runs once per process, first write only."""
+        if self._schema_checked:
+            return
+        self._schema_checked = True
+        if not os.path.exists(self.cfg.csv_path):
+            return
+        try:
+            with open(self.cfg.csv_path, newline="", encoding="utf-8") as f:
+                existing = next(csv.reader(f), [])
+        except OSError:
+            return
+        if existing != keys:
+            bak = self.cfg.csv_path + ".bak"
+            os.replace(self.cfg.csv_path, bak)
+            print(f"[alert] CSV schema changed -> rotated old log to {bak}")
+            self._csv_header_done = False
+
     def _log_csv(self, row: dict) -> None:
         if not self.cfg.csv:
             return
         os.makedirs(os.path.dirname(self.cfg.csv_path), exist_ok=True)
+        self._ensure_schema(list(row.keys()))
         new = not self._csv_header_done
         with open(self.cfg.csv_path, "a", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=list(row.keys()))

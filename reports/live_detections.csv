@@ -1,4 +1,5 @@
-timestamp,source,rf_label,rf_confidence,drone_prob,fingerprint,fingerprint_conf,wifi_ssids,unknown_model,duration_sec,threat_score,threat_level,modifiers
-2026-06-14 11:37:20,mock,drone,83.0,83.0,DJI_Mavic,66.7,,False,0.0,39.1,WATCH,
-2026-06-14 11:38:02,mock,drone,71.0,71.0,DJI_Mavic,60.4,DJI-Mavic-1A2B,False,0.0,36.8,WATCH,
-2026-06-14 11:38:13,mock,noise,100.0,0.0,,0.0,,True,0.0,15.0,SAFE,unknown model (+15)
+timestamp,source,rf_label,rf_confidence,drone_prob,fingerprint,fingerprint_conf,wifi_ssids,unknown_model,duration_sec,threat_score,threat_level,modifiers,rid_manuf,rid_model,rid_serial,drone_lat,drone_lon,pilot_lat,pilot_lon,visual_conf,acoustic_conf,control_conf,control_band_mhz,loc_lat,loc_lon,loc_alt,azimuth_deg,elevation_deg,aircraft_nearby
+2026-07-02 15:05:38,mock,noise,99.0,0.5,,0.0,DJI-Mavic-1A2B;DJI-Mavic-1A2B,True,0.0,75.0,WARNING,unknown model (+15); Remote ID decoded (floor 75),DJI,Mavic 3,SIM-1581F2E4A7B9,12.972800000000001,77.59545,12.9712,77.59445,5.3,23.9,84.0,915.0,,,,,,False
+2026-07-05 14:22:01,rtl-sdr,wifi,88.0,12.0,,,Parrot-Anafi-77,,,41.0,WATCH,control link (+15),,,,,,,,12.0,,61.0,868.0,,,,,,
+2026-07-05 14:22:07,rtl-sdr,drone,72.0,72.0,DJI_Tello,64.0,,,,58.0,WARNING,unknown model (+15),,,,,,,,44.0,51.0,,,,,,,,
+2026-07-05 14:22:13,kismet,drone,93.0,93.0,DJI_Mavic,90.0,DJI-Mavic-1A2B,False,,82.0,CRITICAL,Remote ID decoded (floor 75); lingering >30s (+10),DJI,Mavic 3,SIM-1581F2E4A7B9,12.97295,77.59560,12.9712,77.59445,71.0,66.0,80.0,915.0,12.97295,77.59560,42.0,118,21,
