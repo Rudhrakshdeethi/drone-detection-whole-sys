@@ -1,9 +1,13 @@
 import { useState, useEffect } from 'react'
+import { useLive } from '../lib/SystemContext'
+import { levelToLogLevel, num, type FeedRow } from '../lib/api'
+
+type LogLevel = 'INFO' | 'WARN' | 'ALERT' | 'CLEAR'
 
 type LogEntry = {
   id: number
   ts: string
-  level: 'INFO' | 'WARN' | 'ALERT' | 'CLEAR'
+  level: LogLevel
   message: string
   coords?: string
   freq?: string
@@ -54,7 +58,44 @@ const levelBg: Record<string, string> = {
   CLEAR: '#00111a',
 }
 
+// Turn one real backend detection row into a log line.
+function feedRowToEntry(r: FeedRow, i: number): LogEntry {
+  const level = levelToLogLevel(r.threat_level || 'SAFE')
+  const model = r.rid_model || r.fingerprint || ''
+  const rf = (r.rf_label || '').toUpperCase()
+  let message: string
+  if (level === 'ALERT') {
+    message = model ? `DRONE DETECTED — ${model}` : `THREAT — ${rf || (r.source || 'RF').toUpperCase()}`
+  } else if (model) {
+    message = `Contact classified: ${model}`
+  } else {
+    message = `${(r.source || 'sensor').toUpperCase()} · ${rf || 'scan'} · score ${Math.round(num(r.threat_score) ?? 0)}`
+  }
+
+  const lat = num(r.drone_lat)
+  const lon = num(r.drone_lon)
+  const coords = lat !== null && lon !== null ? `${lat.toFixed(4)}, ${lon.toFixed(4)}` : undefined
+
+  const band = num(r.control_band_mhz)
+  const freq = band
+    ? `${band.toFixed(0)} MHz`
+    : r.wifi_ssids
+      ? `WiFi · ${r.wifi_ssids.split(/[;,]/)[0]}`
+      : undefined
+
+  return {
+    id: i,
+    ts: (r.timestamp || '').slice(11, 19) || now(),
+    level,
+    message,
+    coords,
+    freq,
+  }
+}
+
 export default function LiveLog() {
+  const { live, snapshot } = useLive()
+
   const [entries, setEntries] = useState<LogEntry[]>(() => {
     const base = new Date()
     return seedEvents.map((e, i) => ({
@@ -64,10 +105,11 @@ export default function LiveLog() {
     }))
   })
 
-  const msgIdx = { current: 0 }
   const [idx, setIdx] = useState(0)
 
+  // Simulation loop — only runs while the backend is offline.
   useEffect(() => {
+    if (live) return
     const delay = 3000 + Math.random() * 4000
     const id = setTimeout(() => {
       const next = liveMessages[idx % liveMessages.length]
@@ -75,7 +117,12 @@ export default function LiveLog() {
       setIdx(i => i + 1)
     }, delay)
     return () => clearTimeout(id)
-  }, [idx])
+  }, [idx, live])
+
+  // When live, entries come straight from the real detection feed (newest first).
+  const feedEntries: LogEntry[] | null =
+    live && snapshot ? snapshot.feed.map((r, i) => feedRowToEntry(r, i)) : null
+  const shown = feedEntries ?? entries
 
   return (
     <div style={{
@@ -103,6 +150,9 @@ export default function LiveLog() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span className="blink" style={{ width: 5, height: 5, borderRadius: '50%', background: '#ff3131', boxShadow: '0 0 6px #ff3131', display: 'inline-block' }} />
           LIVE DETECTION LOG
+          <span style={{ fontSize: '7px', color: live ? '#00ff41' : '#2d4f32', letterSpacing: '1px', border: `1px solid ${live ? '#1a3320' : '#1a3320'}`, padding: '0 4px', borderRadius: 2 }}>
+            {live ? 'BACKEND' : 'SIM'}
+          </span>
         </div>
         <div style={{ display: 'flex', gap: 12, fontSize: '8px' }}>
           {(['ALERT', 'WARN', 'INFO', 'CLEAR'] as const).map(l => (
@@ -111,11 +161,16 @@ export default function LiveLog() {
         </div>
       </div>
 
-      <div style={{ flex: 1, overflow: 'hidden', fontFamily: "'JetBrains Mono', monospace" }}>
-        {entries.map((e, i) => (
+      <div style={{ flex: 1, overflowY: 'auto', fontFamily: "'JetBrains Mono', monospace" }}>
+        {shown.length === 0 && (
+          <div style={{ padding: '18px 12px', fontSize: '10px', color: '#2d4f32', letterSpacing: '1px' }}>
+            Waiting for detector stream… (run <span style={{ color: '#5a8a60' }}>ml.runtime.live_detector</span>)
+          </div>
+        )}
+        {shown.map((e, i) => (
           <div
             key={e.id}
-            className={i === 0 ? 'fade-in-down' : ''}
+            className={i === 0 && !live ? 'fade-in-down' : ''}
             style={{
               display: 'grid',
               gridTemplateColumns: '70px 36px 1fr auto',

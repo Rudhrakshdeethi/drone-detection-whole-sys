@@ -38,6 +38,15 @@ export default defineConfig({
     strictPort: true,
     hmr: isFigmaSandbox ? { clientPort: 443 } : undefined,
     watch: { ignored: ['**/.figma/**'] },
+    // Proxy the dashboard's data calls to the CampusShield Python backend
+    // (`python -m ml.runtime.dashboard`, default port 8080). Override with
+    // BACKEND_URL when the detector runs on another host (e.g. a Raspberry Pi).
+    proxy: {
+      '/api': {
+        target: process.env.BACKEND_URL || 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+    },
   },
   preview: {
     host: '0.0.0.0',

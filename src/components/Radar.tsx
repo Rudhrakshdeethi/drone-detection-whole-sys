@@ -1,10 +1,19 @@
 import { useState, useEffect, useRef } from 'react'
+import { useLive } from '../lib/SystemContext'
+import { num } from '../lib/api'
 
 type Blip = { id: number; x: number; y: number; vx: number; vy: number; age: number; maxAge: number; threat: boolean }
 
 let blipId = 0
 
+// Radar covers 5 km; a single-node fix range is in metres. Clamp the plotted
+// radius so a real bearing is always visible (mid-ring minimum) rather than
+// collapsing onto the centre.
+const RADAR_RANGE_M = 5000
+
 export default function Radar() {
+  const { live, snapshot } = useLive()
+
   const [blips, setBlips] = useState<Blip[]>([
     { id: blipId++, x: 0.2, y: -0.4, vx: -0.002, vy: 0.001, age: 0, maxAge: 800, threat: true },
     { id: blipId++, x: -0.5, y: 0.5, vx: 0.001, vy: -0.002, age: 100, maxAge: 900, threat: false },
@@ -17,6 +26,9 @@ export default function Radar() {
     const id = setInterval(() => {
       angleRef.current = (angleRef.current + 1.5) % 360
       setSweepAngle(angleRef.current)
+
+      // Live mode shows the real target only — freeze the ambient simulation.
+      if (live) return
 
       // Move blips according to their velocity and occasionally add new ones
       setBlips(prev => {
@@ -44,7 +56,28 @@ export default function Radar() {
       })
     }, 20)
     return () => clearInterval(id)
-  }, [])
+  }, [live])
+
+  // Build the real target blip from the backend localization fix (bearing +
+  // range), when one is available.
+  const fix = live && snapshot ? snapshot.fix : null
+  const realThreat = live && snapshot ? snapshot.threat.level : null
+  const az = fix ? num(fix.az) : null
+  const realBlips: Blip[] = []
+  if (az !== null) {
+    const rng = fix ? num(fix.range_m) : null
+    const rNorm = rng !== null ? Math.min(1, Math.max(0.35, rng / RADAR_RANGE_M)) : 0.6
+    const rad = (az * Math.PI) / 180 // 0° = North (up)
+    realBlips.push({
+      id: -1,
+      x: Math.sin(rad) * rNorm,
+      y: -Math.cos(rad) * rNorm,
+      vx: 0, vy: 0, age: 0, maxAge: 1,
+      threat: realThreat === 'WARNING' || realThreat === 'CRITICAL',
+    })
+  }
+
+  const activeBlips = live ? realBlips : blips
 
   const cx = 130
   const cy = 130
@@ -65,7 +98,9 @@ export default function Radar() {
   const x2 = cx + Math.cos(sweep2) * r
   const y2 = cy + Math.sin(sweep2) * r
 
-  const hasCriticalThreat = blips.some(b => b.threat && Math.sqrt(b.x*b.x + b.y*b.y) < 0.5)
+  const hasCriticalThreat = live
+    ? realThreat === 'CRITICAL'
+    : activeBlips.some(b => b.threat && Math.sqrt(b.x*b.x + b.y*b.y) < 0.5)
 
   return (
     <div 
@@ -93,6 +128,11 @@ export default function Radar() {
       }}>
         <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#00ff41', boxShadow: '0 0 6px #00ff41', display: 'inline-block' }} />
         RADAR · 5km RANGE · ACTIVE SWEEP
+        {live && (
+          <span style={{ marginLeft: 'auto', fontSize: '8px', color: az !== null ? '#00ff41' : '#2d4f32', letterSpacing: '1px' }}>
+            {az !== null ? `BRG ${Math.round(az)}°` : 'NO FIX'}
+          </span>
+        )}
       </div>
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '16px 12px 12px', minHeight: 0 }}>
@@ -148,9 +188,9 @@ export default function Radar() {
             />
 
             {/* Blips */}
-            {blips.map(b => {
+            {activeBlips.map(b => {
               const pos = blipCoords(b)
-              const opacity = Math.max(0, 1 - b.age / b.maxAge)
+              const opacity = live ? 1 : Math.max(0, 1 - b.age / b.maxAge)
               return (
                 <g key={b.id}>
                   <circle
@@ -206,8 +246,8 @@ export default function Radar() {
 
         {/* Blip count */}
         <div style={{ marginTop: 8, display: 'flex', gap: 16, fontSize: '9px', letterSpacing: '1px' }}>
-          <span style={{ color: '#00ff41' }}>● {blips.filter(b => !b.threat).length} CONTACTS</span>
-          <span style={{ color: '#ff3131' }}>● {blips.filter(b => b.threat).length} THREATS</span>
+          <span style={{ color: '#00ff41' }}>● {activeBlips.filter(b => !b.threat).length} CONTACTS</span>
+          <span style={{ color: '#ff3131' }}>● {activeBlips.filter(b => b.threat).length} THREATS</span>
         </div>
       </div>
     </div>

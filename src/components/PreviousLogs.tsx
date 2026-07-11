@@ -1,3 +1,8 @@
+import { useLive } from '../lib/SystemContext'
+import { num, type FeedRow, type Level } from '../lib/api'
+
+type Threat = 'HIGH' | 'MED' | 'LOW'
+
 type Detection = {
   id: string
   drone: string
@@ -6,8 +11,8 @@ type Detection = {
   duration: string
   coords: string
   freq: string
-  threat: 'HIGH' | 'MED' | 'LOW'
-  status: 'RESOLVED' | 'ONGOING' | 'ESCAPED'
+  threat: Threat
+  status: string
 }
 
 const previousDetections: Detection[] = [
@@ -68,16 +73,51 @@ const previousDetections: Detection[] = [
   },
 ]
 
-const threatColors = { HIGH: '#ff3131', MED: '#ff8c00', LOW: '#00ff41' }
-const statusColors = { RESOLVED: '#00ff41', ONGOING: '#ff8c00', ESCAPED: '#ff3131' }
-const statusBg = { RESOLVED: '#003310', ONGOING: '#1a0e00', ESCAPED: '#1a0000' }
+const threatColors: Record<Threat, string> = { HIGH: '#ff3131', MED: '#ff8c00', LOW: '#00ff41' }
+const statusColors: Record<string, string> = {
+  RESOLVED: '#00ff41', ONGOING: '#ff8c00', ESCAPED: '#ff3131',
+  SAFE: '#00ff41', WATCH: '#00b4d8', WARNING: '#ff8c00', CRITICAL: '#ff3131',
+}
+const statusBg: Record<string, string> = {
+  RESOLVED: '#003310', ONGOING: '#1a0e00', ESCAPED: '#1a0000',
+  SAFE: '#003310', WATCH: '#00111a', WARNING: '#1a0e00', CRITICAL: '#1a0000',
+}
+
+function levelToThreat(l: Level): Threat {
+  if (l === 'CRITICAL' || l === 'WARNING') return 'HIGH'
+  if (l === 'WATCH') return 'MED'
+  return 'LOW'
+}
+
+// Turn the real detection feed into history rows (newest first).
+function detectionsFromFeed(feed: FeedRow[]): Detection[] {
+  return feed.map((r, i) => {
+    const lat = num(r.drone_lat)
+    const lon = num(r.drone_lon)
+    const band = num(r.control_band_mhz)
+    return {
+      id: `EVT-${String(feed.length - i).padStart(4, '0')}`,
+      drone: r.rid_model || r.fingerprint || (r.rf_label || 'Unknown').toUpperCase(),
+      time: (r.timestamp || '').slice(11, 19) || '—',
+      date: (r.timestamp || '').slice(0, 10) || '—',
+      duration: '—',
+      coords: lat !== null && lon !== null ? `${lat.toFixed(4)}, ${lon.toFixed(4)}` : '—',
+      freq: band ? `${band.toFixed(0)} MHz` : r.wifi_ssids ? 'WiFi' : '—',
+      threat: levelToThreat(r.threat_level || 'SAFE'),
+      status: r.threat_level || 'SAFE',
+    }
+  })
+}
 
 export default function PreviousLogs() {
+  const { live, snapshot } = useLive()
+  const detections = live && snapshot ? detectionsFromFeed(snapshot.feed) : previousDetections
+
   const handleExportCSV = () => {
-    const header = "ID,Drone,Date,Time,Duration,Coords,Freq,Threat,Status\n"
-    const rows = previousDetections.map(d => 
+    const header = 'ID,Drone,Date,Time,Duration,Coords,Freq,Threat,Status\n'
+    const rows = detections.map(d =>
       `${d.id},"${d.drone}",${d.date},${d.time},${d.duration},"${d.coords}",${d.freq},${d.threat},${d.status}`
-    ).join("\n")
+    ).join('\n')
     const blob = new Blob([header + rows], { type: 'text/csv' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -115,8 +155,8 @@ export default function PreviousLogs() {
           DETECTION HISTORY
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span style={{ fontSize: '8px', color: '#2d4f32' }}>{previousDetections.length} RECORDS</span>
-          <button 
+          <span style={{ fontSize: '8px', color: '#2d4f32' }}>{detections.length} RECORDS</span>
+          <button
             onClick={handleExportCSV}
             style={{ background: 'transparent', border: '1px solid #1a3320', color: '#00ff41', padding: '2px 6px', fontSize: '8px', cursor: 'pointer', fontFamily: 'inherit' }}
           >
@@ -126,7 +166,12 @@ export default function PreviousLogs() {
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto' }}>
-        {previousDetections.map((d, i) => (
+        {detections.length === 0 && (
+          <div style={{ padding: '18px 12px', fontSize: '10px', color: '#2d4f32', letterSpacing: '1px' }}>
+            No detections logged yet.
+          </div>
+        )}
+        {detections.map((d, i) => (
           <div
             key={d.id}
             style={{
@@ -153,8 +198,8 @@ export default function PreviousLogs() {
               <span style={{
                 fontSize: '7px',
                 padding: '1px 5px',
-                background: statusBg[d.status],
-                color: statusColors[d.status],
+                background: statusBg[d.status] ?? '#0d1a0d',
+                color: statusColors[d.status] ?? '#5a8a60',
                 borderRadius: 2,
                 letterSpacing: '1px',
               }}>

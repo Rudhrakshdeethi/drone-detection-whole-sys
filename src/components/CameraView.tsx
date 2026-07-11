@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react'
+import { useLive } from '../lib/SystemContext'
+import { num } from '../lib/api'
 
 const overlayLines = [
   { x1: '10%', y1: '10%', x2: '10%', y2: '16%' }, { x1: '10%', y1: '10%', x2: '16%', y2: '10%' },
@@ -8,11 +10,23 @@ const overlayLines = [
 ]
 
 export default function CameraView() {
+  const { live, snapshot } = useLive()
   const [crosshairX, setCrosshairX] = useState(38)
   const [crosshairY, setCrosshairY] = useState(45)
-  const [tracking, setTracking] = useState(false)
+  const [simTracking, setSimTracking] = useState(false)
   const [showGrid, setShowGrid] = useState(true)
   const [cameraMode, setCameraMode] = useState<'NIGHT' | 'THERMAL' | 'NORMAL'>('NIGHT')
+
+  // Real localization / vision readout when the backend is live.
+  const fix = live && snapshot ? snapshot.fix : null
+  const latestFeed = live && snapshot ? snapshot.feed[0] : undefined
+  const visionConf = latestFeed ? num(latestFeed.visual_conf) : null
+  const realLat = fix ? num(fix.lat) : null
+  const realLon = fix ? num(fix.lon) : null
+  const realThreat = live && snapshot ? snapshot.threat.level : null
+  const tracking = live
+    ? realThreat === 'WARNING' || realThreat === 'CRITICAL' || (visionConf ?? 0) > 0
+    : simTracking
 
   const getFilter = () => {
     switch (cameraMode) {
@@ -33,9 +47,10 @@ export default function CameraView() {
   }, [])
 
   useEffect(() => {
-    const id = setInterval(() => setTracking(v => !v), 3200)
+    if (live) return
+    const id = setInterval(() => setSimTracking(v => !v), 3200)
     return () => clearInterval(id)
-  }, [])
+  }, [live])
 
   return (
     <div
@@ -93,14 +108,15 @@ export default function CameraView() {
           <line x1="50%" y1="47%" x2="50%" y2="53%" stroke="#00ff41" strokeWidth="0.8" opacity="0.3" />
           <line x1="47%" y1="50%" x2="53%" y2="50%" stroke="#00ff41" strokeWidth="0.8" opacity="0.3" />
 
-          {/* Tracking box */}
-          <g transform={`translate(${crosshairX}%, ${crosshairY}%)`}>
+          {/* Tracking box — nested <svg> positions the group at a percentage of
+              the viewport (SVG transform translate() does not accept % units). */}
+          <svg x={`${crosshairX}%`} y={`${crosshairY}%`} overflow="visible" style={{ transition: 'x 0.06s linear, y 0.06s linear' }}>
             <rect x="-20" y="-14" width="40" height="28" stroke={tracking ? '#ff3131' : '#00ff41'} strokeWidth="1" fill="none" opacity="0.8" />
             <line x1="-24" y1="0" x2="-22" y2="0" stroke={tracking ? '#ff3131' : '#00ff41'} strokeWidth="1" opacity="0.8" />
             <line x1="22" y1="0" x2="24" y2="0" stroke={tracking ? '#ff3131' : '#00ff41'} strokeWidth="1" opacity="0.8" />
             <line x1="0" y1="-18" x2="0" y2="-16" stroke={tracking ? '#ff3131' : '#00ff41'} strokeWidth="1" opacity="0.8" />
             <line x1="0" y1="16" x2="0" y2="18" stroke={tracking ? '#ff3131' : '#00ff41'} strokeWidth="1" opacity="0.8" />
-          </g>
+          </svg>
 
           {/* Grid overlay */}
           {showGrid && [1,2,3].map(i => (
@@ -113,13 +129,13 @@ export default function CameraView() {
 
         {/* HUD data overlay */}
         <div style={{ position: 'absolute', bottom: 8, left: 10, fontSize: '9px', color: '#00ff41', opacity: 0.7, letterSpacing: '1px', lineHeight: 1.8 }}>
-          <div>ALT: 142m</div>
+          <div>VISION: {live ? (visionConf !== null ? `${visionConf.toFixed(0)}%` : '—') : '142m'}</div>
           <div>ZOOM: 4.2x</div>
           <div>FPS: 30</div>
         </div>
         <div style={{ position: 'absolute', bottom: 8, right: 10, fontSize: '9px', color: '#00ff41', opacity: 0.7, letterSpacing: '1px', lineHeight: 1.8, textAlign: 'right' }}>
-          <div>LAT: 40.7128°N</div>
-          <div>LON: 74.0060°W</div>
+          <div>LAT: {realLat !== null ? `${realLat.toFixed(4)}°` : live ? '—' : '40.7128°N'}</div>
+          <div>LON: {realLon !== null ? `${realLon.toFixed(4)}°` : live ? '—' : '74.0060°W'}</div>
           <div>{tracking ? <span style={{ color: '#ff3131' }}>TRACKING</span> : 'SCANNING'}</div>
         </div>
 
