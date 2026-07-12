@@ -1,0 +1,106 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Rajdhani:wght@400;500;600;700&display=swap');
+@import 'tailwindcss';
+
+@theme inline {
+  --color-bg: #070c07;
+  --color-panel: #0d160d;
+  --color-panel-alt: #0a120a;
+  --color-border: #1a3320;
+  --color-border-bright: #2a5534;
+  --color-phosphor: #00ff41;
+  --color-phosphor-dim: #00c832;
+  --color-phosphor-muted: #006618;
+  --color-phosphor-glow: rgba(0, 255, 65, 0.15);
+  --color-text: #b8e4be;
+  --color-text-dim: #5a8a60;
+  --color-text-muted: #2d4f32;
+  --color-warn: #ff8c00;
+  --color-danger: #ff3131;
+  --color-info: #00b4d8;
+  --font-mono: 'JetBrains Mono', monospace;
+  --font-display: 'Rajdhani', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  background: #070c07;
+  color: #c8f5ce;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 500;
+  height: 100%;
+  margin: 0;
+}
+
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: #0d160d;
+}
+::-webkit-scrollbar-thumb {
+  background: #1a3320;
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #2a5534;
+}
+
+@keyframes radar-sweep {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes radar-trail {
+  0% { opacity: 0.8; }
+  100% { opacity: 0; }
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.2; }
+}
+
+@keyframes pulse-ring {
+  0% { transform: scale(0.6); opacity: 0.8; }
+  100% { transform: scale(1.4); opacity: 0; }
+}
+
+@keyframes scan-line {
+  0% { top: 0%; }
+  100% { top: 100%; }
+}
+
+@keyframes fade-in-down {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes critical-pulse {
+  0% { box-shadow: inset 0 0 10px rgba(255, 49, 49, 0.2), 0 0 10px rgba(255, 49, 49, 0.2); border-color: rgba(255, 49, 49, 0.4); }
+  50% { box-shadow: inset 0 0 30px rgba(255, 49, 49, 0.6), 0 0 30px rgba(255, 49, 49, 0.6); border-color: #ff3131; }
+  100% { box-shadow: inset 0 0 10px rgba(255, 49, 49, 0.2), 0 0 10px rgba(255, 49, 49, 0.2); border-color: rgba(255, 49, 49, 0.4); }
+}
+
+.critical-alert {
+  animation: critical-pulse 1s infinite;
+}
+
+.radar-sweep {
+  animation: radar-sweep 3s linear infinite;
+  transform-origin: center;
+}
+
+.blink {
+  animation: blink 1.2s step-end infinite;
+}
+
+.scan-line {
+  animation: scan-line 4s linear infinite;
+}
+
+.fade-in-down {
+  animation: fade-in-down 0.4s ease forwards;
+}
