@@ -1,5 +1,25 @@
 # Counter-Drone Interceptor — how to run it
 
+## Tello demo drone (TELLO-954B1F)
+
+The Tello is the easy demo target. It uses the UDP SDK (`192.168.10.1:8889`) and
+its WiFi is **open** (no password). A stock Tello allows only **one** WiFi client,
+so the laptop **seizes** the link (the phone drops) and lands it — a clean
+interception.
+
+- **Full dashboard demo:** double-click **`Launch-Tello-Interceptor.bat`** →
+  joins the Tello, opens the dashboard with LAND armed, restores internet on exit.
+- **One-shot land:** double-click **`Land-Tello-Now.bat`** → seizes the link,
+  sends LAND, reconnects internet — all in one go (no dashboard).
+
+Set `VITE_SSID=TELLO-954B1F` in `.env.local` (already set) so the UI flags it and
+the backend routes LAND to the Tello stack. To switch back to the Pluto, set
+`VITE_SSID=PlutoX_2025_1043` and use `Launch-Interceptor.bat`.
+
+---
+
+## Pluto drone (PlutoX_2025_1043)
+
 **Roles:** the phone is the **pilot** (flies the drone). This laptop is the
 **interceptor** — when you click **LAND** on the dashboard, it commands your own
 Pluto (`PlutoX_2025_1043`) to land, overriding the flight via MSP over TCP

@@ -5,21 +5,23 @@
   internet, not both. This script handles the whole hand-off:
 
     1. remembers your current internet WiFi,
-    2. joins the drone's WiFi (PlutoX_2025_1043),
+    2. joins the drone's WiFi (creating a profile if needed; open or WPA2),
     3. starts the backend + dashboard locally (NO internet needed),
     4. opens the dashboard — the LAND button is armed for your drone,
     5. when you press ENTER, cleanly stops everything and reconnects your internet.
 
-  Phone = pilot. Laptop = interceptor: clicking LAND commands your own Pluto to
-  land, overriding the flight, via MSP over TCP (192.168.4.1:23).
+  Phone = pilot. Laptop = interceptor: clicking LAND commands your own drone to
+  land. The backend routes LAND to the right stack by SSID:
+    * TELLO-* -> Tello UDP SDK (192.168.10.1:8889)  [single-client: laptop seizes the link]
+    * else    -> Pluto MSP over TCP (192.168.4.1:23)
 
-  Run it by double-clicking Launch-Interceptor.bat, or:
-      powershell -ExecutionPolicy Bypass -File interceptor.ps1
+  Examples:
+    powershell -ExecutionPolicy Bypass -File interceptor.ps1 -DroneSsid TELLO-954B1F
+    powershell -ExecutionPolicy Bypass -File interceptor.ps1 -DroneSsid PlutoX_2025_1043
 #>
 param(
-  [string]$DroneSsid = 'PlutoX_2025_1043',
-  [string]$DroneHost = '192.168.4.1',
-  [string]$DronePort = '23'
+  [string]$DroneSsid = 'TELLO-954B1F',
+  [string]$Password  = ''            # empty = open network, or reuse an existing saved profile
 )
 
 $ErrorActionPreference = 'Stop'
@@ -31,9 +33,52 @@ function Get-CurrentSsid {
   return ''
 }
 
+function Test-ProfileExists([string]$name) {
+  return [bool]((netsh wlan show profiles) | Select-String ([regex]::Escape($name)))
+}
+
+# Create a WLAN profile (open or WPA2-PSK) if one isn't already saved.
+function Ensure-Profile([string]$ssid, [string]$pass) {
+  if (Test-ProfileExists $ssid) { return }
+  if ([string]::IsNullOrEmpty($pass)) {
+    $sec = @"
+    <security><authEncryption><authentication>open</authentication><encryption>none</encryption><useOneX>false</useOneX></authEncryption></security>
+"@
+  } else {
+    $sec = @"
+    <security><authEncryption><authentication>WPA2PSK</authentication><encryption>AES</encryption><useOneX>false</useOneX></authEncryption>
+    <sharedKey><keyType>passPhrase</keyType><protected>false</protected><keyMaterial>$pass</keyMaterial></sharedKey></security>
+"@
+  }
+  $xml = @"
+<?xml version="1.0"?>
+<WLANProfile xmlns="http://www.microsoft.com/networking/WLAN/profile/v1">
+  <name>$ssid</name>
+  <SSIDConfig><SSID><name>$ssid</name></SSID></SSIDConfig>
+  <connectionType>ESS</connectionType>
+  <connectionMode>manual</connectionMode>
+  <MSM>
+$sec
+  </MSM>
+</WLANProfile>
+"@
+  $path = Join-Path $env:TEMP ("wlan_" + ($ssid -replace '[^A-Za-z0-9]', '_') + ".xml")
+  $xml | Out-File -FilePath $path -Encoding utf8
+  netsh wlan add profile filename="$path" user=current | Out-Null
+  Remove-Item $path -Force -ErrorAction SilentlyContinue
+}
+
+function Stop-OnPort([int]$port) {
+  try {
+    Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
+      Select-Object -ExpandProperty OwningProcess -Unique |
+      ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
+  } catch {}
+}
+
 # Remember the internet network so we can come back to it.
 $origSsid = Get-CurrentSsid
-if (-not $origSsid) { $origSsid = 'NxtWave_Te@m' }
+if (-not $origSsid -or $origSsid -eq $DroneSsid) { $origSsid = 'NxtWave_Te@m' }
 Write-Host "Current internet network : $origSsid" -ForegroundColor Cyan
 
 # Stop every auto-connect profile from stealing the adapter mid-session.
@@ -50,14 +95,6 @@ foreach ($pn in $profNames) {
   }
 }
 
-function Stop-OnPort([int]$port) {
-  try {
-    Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
-      Select-Object -ExpandProperty OwningProcess -Unique |
-      ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
-  } catch {}
-}
-
 function Restore-Internet {
   Write-Host "`nReconnecting your internet ($origSsid)..." -ForegroundColor Cyan
   foreach ($pn in $autoProfiles) { netsh wlan set profileparameter name="$pn" connectionmode=auto | Out-Null }
@@ -66,9 +103,11 @@ function Restore-Internet {
   Write-Host ("Now on: " + (Get-CurrentSsid)) -ForegroundColor Green
 }
 
+$backend = $null
 try {
   # --- 1. Join the drone -----------------------------------------------------
   Write-Host "Joining drone WiFi ($DroneSsid)..." -ForegroundColor Yellow
+  Ensure-Profile $DroneSsid $Password
   netsh wlan set profileparameter name="$DroneSsid" connectionmode=manual | Out-Null
   netsh wlan disconnect | Out-Null
   Start-Sleep -Seconds 2
@@ -82,18 +121,20 @@ try {
   if (-not $joined) { throw "Could not join $DroneSsid. Is the drone powered on and broadcasting?" }
   Write-Host "Joined $DroneSsid." -ForegroundColor Green
 
-  # Wait for the drone's control link to answer.
-  $reachable = $false
-  for ($i = 0; $i -lt 10; $i++) {
-    if (Test-Connection -ComputerName $DroneHost -Count 1 -Quiet) { $reachable = $true; break }
-    Start-Sleep -Seconds 1
+  # Wait for the drone's gateway to answer.
+  $gw = (Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway } |
+         Select-Object -First 1 -ExpandProperty IPv4DefaultGateway).NextHop
+  if ($gw) {
+    $reachable = $false
+    for ($i = 0; $i -lt 10; $i++) {
+      if (Test-Connection -ComputerName $gw -Count 1 -Quiet) { $reachable = $true; break }
+      Start-Sleep -Seconds 1
+    }
+    Write-Host ("Drone gateway $gw reachable: $reachable") -ForegroundColor $(if ($reachable) { 'Green' } else { 'Yellow' })
   }
-  Write-Host ("Drone $DroneHost reachable: $reachable") -ForegroundColor $(if ($reachable) { 'Green' } else { 'Yellow' })
 
   # --- 2. Launch backend + dashboard (all local) -----------------------------
-  $env:PLUTO_SSID = $DroneSsid
-  $env:PLUTO_HOST = $DroneHost
-  $env:PLUTO_PORT = $DronePort
+  $env:PLUTO_SSID = $DroneSsid   # target token the backend arms + routes on
 
   Stop-OnPort 8080
   Stop-OnPort 8443
@@ -108,7 +149,6 @@ try {
     -ArgumentList '/c', 'npm run dev' `
     -WorkingDirectory $RepoRoot -WindowStyle Minimized | Out-Null
 
-  # Give the servers a moment, then open the UI.
   $uiUp = $false
   for ($i = 0; $i -lt 15; $i++) {
     Start-Sleep -Seconds 1
@@ -120,8 +160,8 @@ try {
   Write-Host "`n================ INTERCEPTOR ONLINE ================" -ForegroundColor Green
   Write-Host "  Dashboard : http://localhost:8443"
   Write-Host "  Backend   : http://127.0.0.1:8080  (fallback console)"
-  Write-Host "  Target    : $DroneSsid  ->  ${DroneHost}:${DronePort}"
-  Write-Host "  LAND is ARMED. Click LAND (tap once to arm, again to confirm)."
+  Write-Host "  Target    : $DroneSsid"
+  Write-Host "  LAND is ARMED. Tap LAND to arm, tap again within 4s to confirm."
   Write-Host "===================================================" -ForegroundColor Green
   Write-Host "`nPress ENTER here to stop and reconnect your internet..." -ForegroundColor Cyan
   [void][System.Console]::ReadLine()
