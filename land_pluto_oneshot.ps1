@@ -1,25 +1,38 @@
 <#
-  land_pluto_oneshot.ps1 — one-shot PlutoX interception (join-and-land).
+  land_pluto_oneshot.ps1 - one-shot PlutoX interception (join-and-land), with a log.
 
-  The Pluto is multi-client, so the laptop joins ALONGSIDE the phone (no one gets
-  kicked) and sends a controlled LAND that overrides the pilot's sticks, via the
-  official plutocontrol library (MSP over TCP 192.168.4.1:23). Reconnects your
-  internet at the end, so it runs unattended in one shot.
+  The Pluto is multi-client, so the laptop joins ALONGSIDE the phone and sends a
+  controlled LAND (plutocontrol land() over MSP, 192.168.4.1:23), overriding the
+  pilot. It writes everything to land-log.txt and reconnects your internet at the
+  end, so you can run it offline and we can read the log afterward to see exactly
+  what happened.
 
-      powershell -ExecutionPolicy Bypass -File land_pluto_oneshot.ps1
-
-  Tries the known passwords in order; own-drone, land-only, allow-list gated.
+      npm run land
+      # or: powershell -ExecutionPolicy Bypass -File land_pluto_oneshot.ps1
 #>
 param(
   [string]$DroneSsid = 'PlutoX_2025_1043',
   [string[]]$Passwords = @('4267pluto', 'plutox3068')
 )
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Continue'
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$LogPath  = Join-Path $RepoRoot 'land-log.txt'
+"" | Out-File $LogPath -Encoding utf8   # truncate previous log
 
+function Log([string]$m) {
+  $t = (Get-Date).ToString('HH:mm:ss')
+  $line = "$t  $m"
+  Write-Host $line
+  $line | Out-File -FilePath $LogPath -Append -Encoding utf8
+}
 function Cur {
   $m = (netsh wlan show interfaces | Select-String '^\s*SSID\s*:' | Select-Object -First 1)
   if ($m) { return ($m.ToString() -replace '^\s*SSID\s*:\s*', '').Trim() }
+  return ''
+}
+function St {
+  $m = (netsh wlan show interfaces | Select-String '^\s*State\s*:' | Select-Object -First 1)
+  if ($m) { return ($m.ToString() -replace '^\s*State\s*:\s*', '').Trim() }
   return ''
 }
 function Add-Prof([string]$pass) {
@@ -37,18 +50,13 @@ function Add-Prof([string]$pass) {
   netsh wlan add profile filename="$f" user=current | Out-Null
   Remove-Item $f -Force -ErrorAction SilentlyContinue
 }
-function TryJoin([string]$pass) {
-  Add-Prof $pass
-  netsh wlan disconnect | Out-Null; Start-Sleep 2
-  netsh wlan connect name="$DroneSsid" ssid="$DroneSsid" | Out-Null
-  for ($i = 0; $i -lt 20; $i++) { Start-Sleep 2; if ((Cur) -eq $DroneSsid) { return $true } }
-  return $false
-}
 
 $orig = Cur
 if (-not $orig -or $orig -eq $DroneSsid) { $orig = 'NxtWave_Te@m' }
-Write-Host "Internet to restore afterwards: $orig" -ForegroundColor Cyan
+Log "=== land_pluto_oneshot start ==="
+Log "target=$DroneSsid  internet-to-restore=$orig"
 
+# Keep other saved networks from grabbing the adapter mid-run.
 $autos = @()
 foreach ($pn in ((netsh wlan show profiles) | Select-String 'All User Profile\s*:\s*(.+)$' | ForEach-Object { $_.Matches[0].Groups[1].Value.Trim() })) {
   if ($pn -eq $DroneSsid) { continue }
@@ -58,26 +66,57 @@ foreach ($pn in ((netsh wlan show profiles) | Select-String 'All User Profile\s*
 }
 
 try {
+  # Is the drone even visible?
+  $vis = netsh wlan show networks mode=bssid | Select-String ([regex]::Escape($DroneSsid)) -Context 0,5
+  Log ("drone visible in scan: " + [bool]$vis)
+  if ($vis) { ($vis.ToString() -split "`n" | Where-Object { $_ -match 'Signal' } | ForEach-Object { Log ("  " + $_.Trim()) }) }
+
   $joined = $false
   foreach ($p in $Passwords) {
-    Write-Host "Joining $DroneSsid ..." -ForegroundColor Yellow
-    if (TryJoin $p) { $joined = $true; Write-Host "Joined." -ForegroundColor Green; break }
+    Log "joining with password '$p' ..."
+    Add-Prof $p
+    netsh wlan disconnect | Out-Null; Start-Sleep 2
+    netsh wlan connect name="$DroneSsid" ssid="$DroneSsid" | Out-Null
+    for ($i = 0; $i -lt 20; $i++) {
+      Start-Sleep 2
+      $c = Cur; $s = St
+      if ($i % 3 -eq 0) { Log ("  t+{0}s state={1} ssid={2}" -f (($i + 1) * 2), $s, $c) }
+      if ($c -eq $DroneSsid) { $joined = $true; break }
+    }
+    if ($joined) { Log "JOINED with '$p'"; break }
+    Log "  -> did not associate with '$p'"
   }
-  if (-not $joined) { throw "Could not join $DroneSsid (drone out of range / off, or password changed). Move the laptop next to the drone." }
 
-  Start-Sleep 2
-  $gw = (Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway } | Select-Object -First 1 -ExpandProperty IPv4DefaultGateway).NextHop
-  Write-Host "On drone network (gateway $gw). Sending controlled LAND..." -ForegroundColor Green
+  if (-not $joined) {
+    Log "RESULT: could not join $DroneSsid - drone out of range/off, or password wrong."
+    Log "Fix: keep the laptop within ~1 m of the powered-on drone, confirm the phone connects to this exact SSID."
+  } else {
+    Start-Sleep 2
+    $ipc = Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway } | Select-Object -First 1
+    $ip = ($ipc.IPv4Address.IPAddress -join ',')
+    $gw = $ipc.IPv4DefaultGateway.NextHop
+    Log "network: ip=$ip gateway=$gw"
+    $ping = Test-Connection $gw -Count 2 -Quiet
+    $msp = (Test-NetConnection $gw -Port 23 -WarningAction SilentlyContinue).TcpTestSucceeded
+    Log "gateway ping=$ping   MSP tcp/23 open=$msp"
 
-  Push-Location $RepoRoot
-  $env:PLUTO_HOST = '192.168.4.1'; $env:PLUTO_PORT = '23'
-  python -m ml.runtime.pluto_control --enabled --authorized $DroneSsid --ssid $DroneSsid
-  Pop-Location
+    Log "sending LAND via pluto_control ..."
+    Push-Location $RepoRoot
+    $env:PLUTO_HOST = '192.168.4.1'; $env:PLUTO_PORT = '23'
+    $out = (python -m ml.runtime.pluto_control --enabled --authorized $DroneSsid --ssid $DroneSsid 2>&1 | Out-String)
+    Pop-Location
+    foreach ($line in ($out -split "`r?`n")) { if ($line.Trim()) { Log ("  " + $line.Trim()) } }
+    Log "RESULT: land command sent (see lines above for plutocontrol/msp/mock)."
+  }
+}
+catch {
+  Log ("ERROR: " + $_.Exception.Message)
 }
 finally {
-  Write-Host "`nRestoring internet ($orig)..." -ForegroundColor Cyan
+  Log "restoring internet ($orig) ..."
   foreach ($pn in $autos) { netsh wlan set profileparameter name="$pn" connectionmode=auto | Out-Null }
   netsh wlan disconnect | Out-Null; Start-Sleep 2
   netsh wlan connect name="$orig" ssid="$orig" 2>$null | Out-Null; Start-Sleep 4
-  Write-Host ("Now on: " + (Cur)) -ForegroundColor Green
+  Log ("now on: " + (Cur))
+  Log "=== end. log saved to land-log.txt ==="
 }
