@@ -131,8 +131,8 @@ export default function PreviousLogs() {
     <div style={{
       background: '#0a120a',
       border: '1px solid #1a3320',
-      gridColumn: '6 / 11',
-      gridRow: '2',
+      gridColumn: '1 / 11',
+      gridRow: '3',
       display: 'flex',
       flexDirection: 'column',
       minHeight: 0,

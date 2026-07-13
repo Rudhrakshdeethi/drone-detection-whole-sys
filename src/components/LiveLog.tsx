@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useLive } from '../lib/SystemContext'
 import { levelToLogLevel, num, type FeedRow } from '../lib/api'
+import { ssidMatch } from '../lib/target'
 
 type LogLevel = 'INFO' | 'WARN' | 'ALERT' | 'CLEAR'
 
@@ -11,6 +12,7 @@ type LogEntry = {
   message: string
   coords?: string
   freq?: string
+  target?: boolean
 }
 
 const seedEvents: Omit<LogEntry, 'id' | 'ts'>[] = [
@@ -90,6 +92,7 @@ function feedRowToEntry(r: FeedRow, i: number): LogEntry {
     message,
     coords,
     freq,
+    target: ssidMatch(r.wifi_ssids),
   }
 }
 
@@ -128,7 +131,7 @@ export default function LiveLog() {
     <div style={{
       background: '#0a120a',
       border: '1px solid #1a3320',
-      gridColumn: '1 / 6',
+      gridColumn: '6 / 11',
       gridRow: '2',
       display: 'flex',
       flexDirection: 'column',
@@ -203,18 +206,18 @@ export default function LiveLog() {
                 </div>
               )}
             </div>
-            {e.level === 'ALERT' && (
+            {(e.target || e.level === 'ALERT') && (
               <div style={{
                 padding: '2px 6px',
-                background: '#3a0000',
-                border: '1px solid #ff313155',
+                background: e.target ? '#3a1400' : '#3a0000',
+                border: `1px solid ${e.target ? '#ff8c0088' : '#ff313155'}`,
                 fontSize: '8px',
-                color: '#ff3131',
+                color: e.target ? '#ff8c00' : '#ff3131',
                 letterSpacing: '1px',
                 borderRadius: 2,
                 whiteSpace: 'nowrap',
               }}>
-                ⚠ THREAT
+                {e.target ? '◎ TARGET' : '⚠ THREAT'}
               </div>
             )}
           </div>

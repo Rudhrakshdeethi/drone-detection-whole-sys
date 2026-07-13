@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useSystem } from '../lib/SystemContext'
+import { useTarget } from '../lib/target'
 import { LEVEL_COLOR, type Level } from '../lib/api'
 
 export default function Header() {
@@ -180,12 +181,15 @@ function LandControl({
   land: () => Promise<{ action: string; detail: string }>
   lastLand: LandState
 }) {
+  const target = useTarget()
   const [phase, setPhase] = useState<'idle' | 'armed' | 'sending'>('idle')
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current) }, [])
 
-  const disabled = !connected || !armed
+  // Landing is available whenever we have a target to land: either the backend
+  // has an armed link, or the operator named a drone via VITE_SSID.
+  const disabled = !(armed || target.configured)
   const onClick = async () => {
     if (disabled || phase === 'sending') return
     if (phase === 'idle') {
@@ -204,10 +208,15 @@ function LandControl({
   }
 
   const label =
-    phase === 'sending' ? 'SENDING…' : phase === 'armed' ? '⚠ CONFIRM LAND' : 'RF LAND'
+    phase === 'sending' ? 'SENDING…' : phase === 'armed' ? '⚠ CONFIRM LAND' : 'LAND'
   const color = disabled ? '#2d4f32' : phase === 'armed' ? '#ff8c00' : '#ff3131'
 
   const outcome = lastLand && lastLand.action !== 'idle' ? lastLand : null
+  const idleNote = target.configured
+    ? target.detected
+      ? `target ${target.ssid} · locked`
+      : `target ${target.ssid} · searching`
+    : 'own-drone land-only'
 
   return (
     <div className="flex flex-col items-center gap-0.5">
@@ -216,10 +225,10 @@ function LandControl({
         disabled={disabled}
         className={phase === 'armed' ? 'blink' : ''}
         title={
-          !connected
-            ? 'Requires the CampusShield backend (python -m ml.runtime.dashboard)'
-            : !armed
-              ? 'No target link configured (set PLUTO_SSID on the backend)'
+          disabled
+            ? 'No target set — add VITE_SSID to .env.local (or set PLUTO_SSID on the backend)'
+            : target.configured
+              ? `Commands drone '${target.ssid}' to LAND${connected ? '' : ' (demo — backend offline)'}`
               : 'Own-drone LAND only — allow-list gated, never jams third-party aircraft'
         }
         style={{
@@ -250,7 +259,7 @@ function LandControl({
         }}
         title={outcome?.detail || ''}
       >
-        {outcome ? outcome.detail : 'own-drone land-only'}
+        {outcome ? outcome.detail : idleNote}
       </div>
     </div>
   )

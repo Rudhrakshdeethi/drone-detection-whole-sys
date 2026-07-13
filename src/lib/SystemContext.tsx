@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { getStatus, postLand, type LastLand, type Snapshot } from './api'
+import { getStatus, postLand, saveConfig, type LastLand, type Snapshot } from './api'
 
 // Shared system state, polled once for the whole app and handed to every panel.
 //
@@ -22,6 +22,10 @@ const SystemCtx = createContext<SystemState | null>(null)
 
 const POLL_MS = 1500
 
+// Target drone SSID from `.env.local` (VITE_SSID). Read directly here rather than
+// importing from ./target to avoid a module cycle (target.ts depends on useLive).
+const TARGET_SSID = ((import.meta.env.VITE_SSID as string | undefined) ?? '').trim()
+
 export function SystemProvider({ children }: { children: ReactNode }) {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
   const [connected, setConnected] = useState(false)
@@ -30,6 +34,9 @@ export function SystemProvider({ children }: { children: ReactNode }) {
   // Tolerate a single dropped poll before flipping to DEMO — avoids the UI
   // flickering between LIVE/DEMO on a momentary network blip.
   const missesRef = useRef(0)
+  // Push the `.env.local` target SSID to the backend once per connection so the
+  // LAND path commands exactly the drone the operator named.
+  const ssidSyncedRef = useRef(false)
 
   useEffect(() => {
     let alive = true
@@ -43,6 +50,10 @@ export function SystemProvider({ children }: { children: ReactNode }) {
         setSnapshot(s)
         setConnected(true)
         setLastUpdate(Date.now())
+        if (!ssidSyncedRef.current && TARGET_SSID) {
+          ssidSyncedRef.current = true
+          saveConfig({ ssid: TARGET_SSID }).catch(() => { ssidSyncedRef.current = false })
+        }
       } catch {
         if (!alive) return
         missesRef.current += 1
@@ -63,7 +74,19 @@ export function SystemProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const land = async () => {
-    const result = await postLand()
+    let result: LastLand
+    if (connected) {
+      result = await postLand()
+    } else {
+      // No backend reachable — simulate the landing so the demo still responds.
+      const who = TARGET_SSID || 'target drone'
+      await new Promise(r => setTimeout(r, 700))
+      result = {
+        action: 'land',
+        at: new Date().toTimeString().slice(0, 8),
+        detail: `LAND commanded to '${who}' (demo — no backend reachable)`,
+      }
+    }
     // Fold the outcome straight back into the snapshot so the whole UI reacts
     // without waiting for the next poll.
     setSnapshot(prev => (prev ? { ...prev, last_land: result } : prev))

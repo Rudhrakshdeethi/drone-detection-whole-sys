@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useLive } from '../lib/SystemContext'
 import { num } from '../lib/api'
+import { useTarget } from '../lib/target'
 
 const overlayLines = [
   { x1: '10%', y1: '10%', x2: '10%', y2: '16%' }, { x1: '10%', y1: '10%', x2: '16%', y2: '10%' },
@@ -9,30 +10,82 @@ const overlayLines = [
   { x1: '90%', y1: '90%', x2: '84%', y2: '90%' }, { x1: '90%', y1: '90%', x2: '90%', y2: '84%' },
 ]
 
+const FALLBACK_IMG = 'https://images.unsplash.com/photo-1508444845599-5c89863b1c44?w=900&h=500&fit=crop&auto=format'
+
+type CamState = 'connecting' | 'live' | 'none'
+
 export default function CameraView() {
   const { live, snapshot } = useLive()
+  const target = useTarget()
+  const videoRef = useRef<HTMLVideoElement>(null)
+
   const [crosshairX, setCrosshairX] = useState(38)
   const [crosshairY, setCrosshairY] = useState(45)
   const [simTracking, setSimTracking] = useState(false)
   const [showGrid, setShowGrid] = useState(true)
-  const [cameraMode, setCameraMode] = useState<'NIGHT' | 'THERMAL' | 'NORMAL'>('NIGHT')
+  const [cameraMode, setCameraMode] = useState<'NIGHT' | 'THERMAL' | 'NORMAL'>('NORMAL')
+
+  const [cam, setCam] = useState<CamState>('connecting')
+  const [camLabel, setCamLabel] = useState('SECTOR ALPHA')
+
+  // Connect to a physically-attached camera. If one is present, its live video
+  // fills the panel; otherwise we fall back to the stock surveillance still so
+  // the console is never blank.
+  useEffect(() => {
+    let stream: MediaStream | null = null
+    let cancelled = false
+
+    const connect = async () => {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setCam('none')
+        return
+      }
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+        if (cancelled) {
+          stream.getTracks().forEach(t => t.stop())
+          return
+        }
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream
+          await videoRef.current.play().catch(() => {})
+        }
+        const label = stream.getVideoTracks()[0]?.label
+        if (label) setCamLabel(label.replace(/\s*\(.*\)\s*$/, '').toUpperCase().slice(0, 22))
+        setCam('live')
+      } catch {
+        if (!cancelled) setCam('none')
+      }
+    }
+    connect()
+
+    return () => {
+      cancelled = true
+      stream?.getTracks().forEach(t => t.stop())
+    }
+  }, [])
 
   // Real localization / vision readout when the backend is live.
   const fix = live && snapshot ? snapshot.fix : null
   const latestFeed = live && snapshot ? snapshot.feed[0] : undefined
   const visionConf = latestFeed ? num(latestFeed.visual_conf) : null
-  const realLat = fix ? num(fix.lat) : null
-  const realLon = fix ? num(fix.lon) : null
+  const realLat = target.lat ?? (fix ? num(fix.lat) : null)
+  const realLon = target.lon ?? (fix ? num(fix.lon) : null)
   const realThreat = live && snapshot ? snapshot.threat.level : null
-  const tracking = live
-    ? realThreat === 'WARNING' || realThreat === 'CRITICAL' || (visionConf ?? 0) > 0
-    : simTracking
+
+  // Lock onto the configured target SSID whenever it's detected; otherwise fall
+  // back to threat-driven / simulated tracking.
+  const tracking = target.detected
+    ? true
+    : live
+      ? realThreat === 'WARNING' || realThreat === 'CRITICAL' || (visionConf ?? 0) > 0
+      : simTracking
 
   const getFilter = () => {
     switch (cameraMode) {
       case 'THERMAL': return 'invert(1) grayscale(100%) contrast(1.5) brightness(1.2)'
-      case 'NORMAL': return 'contrast(1.1) brightness(0.9)'
-      case 'NIGHT': default: return 'grayscale(100%) brightness(0.55) sepia(1) hue-rotate(80deg) saturate(3)'
+      case 'NIGHT': return 'grayscale(100%) brightness(0.55) sepia(1) hue-rotate(80deg) saturate(3)'
+      case 'NORMAL': default: return 'contrast(1.05) brightness(1)'
     }
   }
 
@@ -47,16 +100,18 @@ export default function CameraView() {
   }, [])
 
   useEffect(() => {
-    if (live) return
+    if (live || target.detected) return
     const id = setInterval(() => setSimTracking(v => !v), 3200)
     return () => clearInterval(id)
-  }, [live])
+  }, [live, target.detected])
+
+  const camConnected = cam === 'live'
 
   return (
     <div
       style={{
         background: '#0a120a',
-        border: '1px solid #1a3320',
+        border: `1px solid ${tracking ? '#3a1414' : '#1a3320'}`,
         gridColumn: '1 / 4',
         gridRow: '1',
         position: 'relative',
@@ -66,21 +121,32 @@ export default function CameraView() {
       }}
     >
       {/* Panel label */}
-      <PanelLabel>CAM-01 · SECTOR ALPHA · LIVE FEED</PanelLabel>
+      <PanelLabel connected={camConnected}>
+        CAM-01 · {camConnected ? camLabel : cam === 'connecting' ? 'CONNECTING…' : 'NO CAMERA · DEMO'} · LIVE FEED
+      </PanelLabel>
 
       {/* Camera image — 80% of panel height */}
-      <div style={{ position: 'relative', width: '100%', height: '80%' }}>
-        <img
-          src="https://images.unsplash.com/photo-1508444845599-5c89863b1c44?w=900&h=500&fit=crop&auto=format"
-          alt="Live aerial surveillance feed"
+      <div style={{ position: 'relative', width: '100%', height: '80%', background: '#000' }}>
+        <video
+          ref={videoRef}
+          autoPlay
+          muted
+          playsInline
           style={{
             width: '100%',
             height: '100%',
             objectFit: 'cover',
             filter: getFilter(),
-            display: 'block',
+            display: camConnected ? 'block' : 'none',
           }}
         />
+        {!camConnected && (
+          <img
+            src={FALLBACK_IMG}
+            alt="Surveillance feed (no camera connected)"
+            style={{ width: '100%', height: '100%', objectFit: 'cover', filter: getFilter(), display: 'block' }}
+          />
+        )}
 
         {/* Scan line */}
         <div
@@ -116,6 +182,9 @@ export default function CameraView() {
             <line x1="22" y1="0" x2="24" y2="0" stroke={tracking ? '#ff3131' : '#00ff41'} strokeWidth="1" opacity="0.8" />
             <line x1="0" y1="-18" x2="0" y2="-16" stroke={tracking ? '#ff3131' : '#00ff41'} strokeWidth="1" opacity="0.8" />
             <line x1="0" y1="16" x2="0" y2="18" stroke={tracking ? '#ff3131' : '#00ff41'} strokeWidth="1" opacity="0.8" />
+            {target.detected && (
+              <text x="24" y="-16" fill="#ff3131" fontSize="9" fontFamily="'JetBrains Mono', monospace">{target.ssid}</text>
+            )}
           </svg>
 
           {/* Grid overlay */}
@@ -130,13 +199,13 @@ export default function CameraView() {
         {/* HUD data overlay */}
         <div style={{ position: 'absolute', bottom: 8, left: 10, fontSize: '9px', color: '#00ff41', opacity: 0.7, letterSpacing: '1px', lineHeight: 1.8 }}>
           <div>VISION: {live ? (visionConf !== null ? `${visionConf.toFixed(0)}%` : '—') : '142m'}</div>
-          <div>ZOOM: 4.2x</div>
-          <div>FPS: 30</div>
+          <div>SRC: {camConnected ? 'CAM' : 'DEMO'}</div>
+          <div>FPS: {camConnected ? 30 : 24}</div>
         </div>
         <div style={{ position: 'absolute', bottom: 8, right: 10, fontSize: '9px', color: '#00ff41', opacity: 0.7, letterSpacing: '1px', lineHeight: 1.8, textAlign: 'right' }}>
           <div>LAT: {realLat !== null ? `${realLat.toFixed(4)}°` : live ? '—' : '40.7128°N'}</div>
           <div>LON: {realLon !== null ? `${realLon.toFixed(4)}°` : live ? '—' : '74.0060°W'}</div>
-          <div>{tracking ? <span style={{ color: '#ff3131' }}>TRACKING</span> : 'SCANNING'}</div>
+          <div>{tracking ? <span style={{ color: '#ff3131' }}>{target.detected ? 'TARGET LOCK' : 'TRACKING'}</span> : 'SCANNING'}</div>
         </div>
 
         {/* REC indicator */}
@@ -148,7 +217,7 @@ export default function CameraView() {
 
       {/* Interactive Controls */}
       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 12px' }}>
-        <button 
+        <button
           onClick={() => setShowGrid(!showGrid)}
           style={{ background: 'transparent', border: '1px solid #1a3320', color: showGrid ? '#00ff41' : '#2d4f32', padding: '4px 8px', fontSize: '9px', cursor: 'pointer', fontFamily: 'inherit' }}
         >
@@ -170,7 +239,7 @@ export default function CameraView() {
   )
 }
 
-function PanelLabel({ children }: { children: React.ReactNode }) {
+function PanelLabel({ children, connected }: { children: React.ReactNode; connected: boolean }) {
   return (
     <div style={{
       background: '#0d1a0d',
@@ -183,7 +252,10 @@ function PanelLabel({ children }: { children: React.ReactNode }) {
       alignItems: 'center',
       gap: 8,
     }}>
-      <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#00ff41', boxShadow: '0 0 6px #00ff41', display: 'inline-block' }} />
+      <span
+        className={connected ? '' : 'blink'}
+        style={{ width: 5, height: 5, borderRadius: '50%', background: connected ? '#00ff41' : '#ff8c00', boxShadow: `0 0 6px ${connected ? '#00ff41' : '#ff8c00'}`, display: 'inline-block' }}
+      />
       {children}
     </div>
   )
