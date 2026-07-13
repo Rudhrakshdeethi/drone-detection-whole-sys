@@ -140,22 +140,42 @@ def _system_snapshot() -> dict:
 
 
 # ---- landing control ---------------------------------------------------------
+def _drone_type(token: str) -> str:
+    """Pick the control stack from an explicit override or the SSID shape."""
+    forced = os.environ.get("DRONE_TYPE", "").strip().lower()
+    if forced in ("tello", "pluto"):
+        return forced
+    t = token.upper()
+    if t.startswith("TELLO") or t.startswith("RMTT"):
+        return "tello"
+    return "pluto"
+
+
 def _command_land() -> dict:
-    """Command the operator's OWN allow-listed drone to LAND, reusing the existing
-    PlutoDefence safety gates (own-drone match + land-only, never jamming)."""
+    """Command the operator's OWN allow-listed drone to LAND. Routes to the right
+    control stack (Tello UDP SDK vs Pluto MSP) by SSID; own-drone + land-only."""
     global _LAST_LAND
     token = CONFIG["ssid"].strip() or "PLUTO"
-    os.environ["PLUTO_HOST"] = CONFIG["host"]
-    os.environ["PLUTO_PORT"] = str(CONFIG["port"])
+    drone = _drone_type(token)
     try:
-        from ml.runtime.pluto_control import PlutoDefence
-        pd = PlutoDefence(host=CONFIG["host"], port=CONFIG["port"],
-                          authorized=[token], enabled=True,
-                          force_mock=CONFIG["force_mock"])
-        # Synthetic own-drone verdict so the allow-list gate authorizes the LAND.
-        verdict = {"wifi_hits": [{"ssid": token, "serial": token, "model": token}]}
-        result = pd.engage(verdict)
-        pd.close()
+        if drone == "tello":
+            from ml.runtime.tello_control import TelloDefence
+            td = TelloDefence(authorized=[token], enabled=True,
+                              force_mock=CONFIG["force_mock"])
+            verdict = {"wifi_hits": [{"ssid": token, "model": token}]}
+            result = td.engage(verdict)
+            td.close()
+        else:
+            os.environ["PLUTO_HOST"] = CONFIG["host"]
+            os.environ["PLUTO_PORT"] = str(CONFIG["port"])
+            from ml.runtime.pluto_control import PlutoDefence
+            pd = PlutoDefence(host=CONFIG["host"], port=CONFIG["port"],
+                              authorized=[token], enabled=True,
+                              force_mock=CONFIG["force_mock"])
+            # Synthetic own-drone verdict so the allow-list gate authorizes the LAND.
+            verdict = {"wifi_hits": [{"ssid": token, "serial": token, "model": token}]}
+            result = pd.engage(verdict)
+            pd.close()
     except Exception as e:
         result = {"action": "error", "reason": f"{type(e).__name__}: {e}"}
 
