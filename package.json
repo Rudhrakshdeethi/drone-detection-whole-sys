@@ -7,7 +7,10 @@
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
     "preview": "vite preview",
-    "format": "oxfmt"
+    "format": "oxfmt",
+    "land": "powershell -NoProfile -ExecutionPolicy Bypass -File land_pluto_oneshot.ps1",
+    "land:tello": "powershell -NoProfile -ExecutionPolicy Bypass -File land_tello_oneshot.ps1",
+    "intercept": "powershell -NoProfile -ExecutionPolicy Bypass -File interceptor.ps1"
   },
   "dependencies": {
     "@types/leaflet": "^1.9.21",
