@@ -8,8 +8,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "format": "oxfmt",
-    "land": "powershell -NoProfile -ExecutionPolicy Bypass -File land_pluto_oneshot.ps1",
+    "land": "powershell -NoProfile -ExecutionPolicy Bypass -File land_now.ps1",
     "land:now": "powershell -NoProfile -ExecutionPolicy Bypass -File land_now.ps1",
+    "land:auto": "powershell -NoProfile -ExecutionPolicy Bypass -File land_pluto_oneshot.ps1",
     "land:tello": "powershell -NoProfile -ExecutionPolicy Bypass -File land_tello_oneshot.ps1",
     "intercept": "powershell -NoProfile -ExecutionPolicy Bypass -File interceptor.ps1"
   },
