@@ -1,5 +1,5 @@
 <#
-  interceptor.ps1 — turn this laptop into the counter-drone INTERCEPTOR station.
+  interceptor.ps1 - turn this laptop into the counter-drone INTERCEPTOR station.
 
   The laptop has ONE WiFi radio, so it can be on the drone's network OR the
   internet, not both. This script handles the whole hand-off:
@@ -7,7 +7,7 @@
     1. remembers your current internet WiFi,
     2. joins the drone's WiFi (creating a profile if needed; open or WPA2),
     3. starts the backend + dashboard locally (NO internet needed),
-    4. opens the dashboard — the LAND button is armed for your drone,
+    4. opens the dashboard - the LAND button is armed for your drone,
     5. when you press ENTER, cleanly stops everything and reconnects your internet.
 
   Phone = pilot. Laptop = interceptor: clicking LAND commands your own drone to
@@ -20,8 +20,8 @@
     powershell -ExecutionPolicy Bypass -File interceptor.ps1 -DroneSsid PlutoX_2025_1043
 #>
 param(
-  [string]$DroneSsid = 'TELLO-954B1F',
-  [string]$Password  = ''            # empty = open network, or reuse an existing saved profile
+  [string]$DroneSsid = 'Pluto_2025_2242',
+  [string]$Password  = ''            # empty = reuse the existing saved profile (or open network)
 )
 
 $ErrorActionPreference = 'Stop'
@@ -114,7 +114,7 @@ try {
   netsh wlan connect name="$DroneSsid" ssid="$DroneSsid" | Out-Null
 
   $joined = $false
-  for ($i = 0; $i -lt 12; $i++) {
+  for ($i = 0; $i -lt 25; $i++) {
     Start-Sleep -Seconds 2
     if ((Get-CurrentSsid) -eq $DroneSsid) { $joined = $true; break }
   }
