@@ -58,12 +58,12 @@ Log "target=$DroneSsid  internet-to-restore=$orig"
 
 # Keep other saved networks from grabbing the adapter mid-run.
 $autos = @()
-foreach ($pn in ((netsh wlan show profiles) | Select-String 'All User Profile\s*:\s*(.+)$' | ForEach-Object { $_.Matches[0].Groups[1].Value.Trim() })) {
+foreach ($pn in ((netsh wlan show profiles) | Select-String '(?:All User|Current User) Profile\s*:\s*(.+)$' | ForEach-Object { $_.Matches[0].Groups[1].Value.Trim() })) {
   if ($pn -eq $DroneSsid) { continue }
-  if (((netsh wlan show profile name="$pn") | Select-String 'Connection mode') -match 'automatically|auto') {
-    $autos += $pn; netsh wlan set profileparameter name="$pn" connectionmode=manual | Out-Null
-  }
+  $autos += $pn
+  netsh wlan set profileparameter name="$pn" connectionmode=manual | Out-Null
 }
+Log ("forced to manual so they can't grab the adapter: " + ($autos -join ', '))
 
 try {
   # Is the drone even visible?
@@ -71,14 +71,16 @@ try {
   Log ("drone visible in scan: " + [bool]$vis)
   if ($vis) { ($vis.ToString() -split "`n" | Where-Object { $_ -match 'Signal' } | ForEach-Object { Log ("  " + $_.Trim()) }) }
 
-  # Connect + wait, WITHOUT touching the profile.
+  # Connect + wait, re-issuing the connect each cycle so the drone wins the
+  # adapter even if Windows keeps trying to auto-reconnect elsewhere.
   function ConnectWait {
     netsh wlan disconnect | Out-Null; Start-Sleep 2
-    netsh wlan connect name="$DroneSsid" ssid="$DroneSsid" | Out-Null
-    for ($i = 0; $i -lt 20; $i++) {
+    for ($i = 0; $i -lt 25; $i++) {
+      if ((Cur) -eq $DroneSsid) { return $true }
+      $r = (netsh wlan connect name="$DroneSsid" ssid="$DroneSsid" 2>&1 | Out-String).Trim()
       Start-Sleep 2
       $c = Cur; $s = St
-      if ($i % 3 -eq 0) { Log ("  t+{0}s state={1} ssid={2}" -f (($i + 1) * 2), $s, $c) }
+      if ($i % 2 -eq 0) { Log ("  t+{0}s state={1} ssid={2} connect='{3}'" -f (($i + 1) * 2), $s, $c, $r) }
       if ($c -eq $DroneSsid) { return $true }
     }
     return $false
