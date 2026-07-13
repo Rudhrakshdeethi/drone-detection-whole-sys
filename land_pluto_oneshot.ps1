@@ -11,7 +11,7 @@
       # or: powershell -ExecutionPolicy Bypass -File land_pluto_oneshot.ps1
 #>
 param(
-  [string]$DroneSsid = 'PlutoX_2025_1043',
+  [string]$DroneSsid = 'Pluto_2025_2242',
   [string[]]$Passwords = @('4267pluto', 'plutox3068')
 )
 $ErrorActionPreference = 'Continue'
@@ -71,20 +71,34 @@ try {
   Log ("drone visible in scan: " + [bool]$vis)
   if ($vis) { ($vis.ToString() -split "`n" | Where-Object { $_ -match 'Signal' } | ForEach-Object { Log ("  " + $_.Trim()) }) }
 
-  $joined = $false
-  foreach ($p in $Passwords) {
-    Log "joining with password '$p' ..."
-    Add-Prof $p
+  # Connect + wait, WITHOUT touching the profile.
+  function ConnectWait {
     netsh wlan disconnect | Out-Null; Start-Sleep 2
     netsh wlan connect name="$DroneSsid" ssid="$DroneSsid" | Out-Null
     for ($i = 0; $i -lt 20; $i++) {
       Start-Sleep 2
       $c = Cur; $s = St
       if ($i % 3 -eq 0) { Log ("  t+{0}s state={1} ssid={2}" -f (($i + 1) * 2), $s, $c) }
-      if ($c -eq $DroneSsid) { $joined = $true; break }
+      if ($c -eq $DroneSsid) { return $true }
     }
-    if ($joined) { Log "JOINED with '$p'"; break }
-    Log "  -> did not associate with '$p'"
+    return $false
+  }
+
+  $joined = $false
+  # Prefer the existing saved profile (it already holds the correct key).
+  if ((netsh wlan show profiles) | Select-String ([regex]::Escape($DroneSsid))) {
+    Log "using saved profile for $DroneSsid ..."
+    if (ConnectWait) { $joined = $true; Log "JOINED via saved profile" }
+    else { Log "  -> saved profile did not associate" }
+  }
+  # Fall back to creating a profile with each candidate password.
+  if (-not $joined) {
+    foreach ($p in $Passwords) {
+      Log "joining with password '$p' ..."
+      Add-Prof $p
+      if (ConnectWait) { $joined = $true; Log "JOINED with '$p'"; break }
+      Log "  -> did not associate with '$p'"
+    }
   }
 
   if (-not $joined) {
