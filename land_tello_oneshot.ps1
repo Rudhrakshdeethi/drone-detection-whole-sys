@@ -57,7 +57,7 @@ try {
   Start-Sleep -Seconds 2
   netsh wlan connect name="$DroneSsid" ssid="$DroneSsid" | Out-Null
   $joined = $false
-  for ($i = 0; $i -lt 12; $i++) { Start-Sleep -Seconds 2; if ((Get-CurrentSsid) -eq $DroneSsid) { $joined = $true; break } }
+  for ($i = 0; $i -lt 25; $i++) { Start-Sleep -Seconds 2; if ((Get-CurrentSsid) -eq $DroneSsid) { $joined = $true; break } }
   if (-not $joined) { throw "Could not join $DroneSsid (is the Tello on?)" }
   Write-Host "Link seized. Sending LAND..." -ForegroundColor Green
 
