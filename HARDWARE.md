@@ -12,28 +12,25 @@ Roles:
 
 ---
 
-## 1. ESP deauther module (ESP8266 **or** ESP32)
-Pick the firmware to match your board, then tell the software which with
-`--deauth-firmware` / `$DEAUTH_FW` (see `learn.md` §5a). The driver
-(`ml/runtime/deauth_esp32.py`) speaks both dialects.
+## 1. ESP32 deauther module (Marauder — what we use)
+We drive an **ESP32 running Marauder**. It is the software default (firmware token
+`marauder`), so no flag is needed. The driver (`ml/runtime/deauth_esp32.py`) also
+supports an ESP8266 as a fallback — see the note at the end.
 
-**If ESP8266 (NodeMCU / Wemos D1 mini — what we have):**
-- [ ] USB-serial chip is usually **CH340** - install the CH340 driver (Windows/Linux).
-- [ ] Flash **Spacehuhn "ESP8266 Deauther" 2.x** with the **serial CLI enabled** (115200). Flash from [deauther.com](https://deauther.com) (ESP Web Tools) or nodemcu-pyflasher.
-- [ ] Confirm serial control at **115200 baud**: `scan ap` -> `show ap` -> `select ap <id>` -> `attack deauth` -> `stop`. Software firmware token: `deauther`.
-- [ ] If your build is **web-UI-only** (ignores serial), pass an explicit `--index N` (the drone AP is usually the strongest/only `Pluto_*`) or drive it over its own web AP.
-- [ ] ESP8266 is **2.4 GHz only** - fine, Pluto/Tello are 2.4 GHz.
-
-**If ESP32 (S2 / S3 / C3 / original):**
-- [ ] USB-serial chip is **CP210x or CH340** - install the matching driver.
-- [ ] Flash **ESP32 Marauder** (serial CLI). Web-flasher or esptool. Software firmware token: `marauder`.
+- [ ] Identify the ESP32 variant (ESP32 / S2 / S3 / C3) and USB-serial chip (**CP210x or CH340**) - install the matching driver.
+- [ ] Flash **ESP32 Marauder** firmware (serial CLI so the Pi can drive it headless). ESP Web Tools flasher or esptool.
 - [ ] Confirm serial control at **115200 baud**: `scanap` -> `list -a` -> `select -a <id>` -> `attack -t deauth` -> `stop`.
-
-**Both boards:**
-- [ ] Verify it **actually deauths a client**: connect the demo phone to the drone AP, run the deauth, confirm the phone drops.
+- [ ] Verify it **actually deauths a client**: connect the demo phone to the drone AP, run the deauth, confirm the phone drops (2.4 GHz - Pluto/Tello are 2.4 GHz, good).
 - [ ] Prefer **targeted** deauth (the one drone AP) over broadcast, so it does not also kick the Pi. The driver refuses any SSID not on the allow-list.
+- [ ] If a scan lists no APs, pass an explicit `--index N` (the drone AP is usually the strongest/only `Pluto_*`) to skip the scan.
 - [ ] Note **MAC randomization**: modern phones use a random MAC per SSID - capture the phone's actual MAC on the drone network if you target by client MAC.
-- [ ] Antenna: if range is weak, use a board with a u.FL external antenna.
+- [ ] Antenna: if range is weak, use an ESP32 board with a u.FL external antenna.
+
+> **ESP8266 fallback:** if you only have an ESP8266 (NodeMCU / Wemos), flash Spacehuhn's
+> "ESP8266 Deauther 2.x" with the serial CLI enabled (115200) and run the software with
+> `--deauth-firmware deauther` (or `export DEAUTH_FW=deauther`). Its CLI is
+> `scan ap / show ap / select ap <id> / attack deauth / stop`. Note some ESP8266 builds
+> are web-UI-only and ignore serial — in that case use `--index N`.
 
 ## 2. Raspberry Pi 5 (interceptor brain)
 - [ ] Raspberry Pi OS (64-bit), fully updated; **SSH enabled**; a fixed hostname (e.g. `interceptor.local`) so the laptop can reach it without Ethernet (mDNS).

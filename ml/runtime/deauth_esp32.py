@@ -223,6 +223,23 @@ class DeauthESP32:
             return {"action": "error", "target": ssid, "reason":
                     f"{type(e).__name__}: {e}"}
 
+    def selftest(self) -> dict:
+        """Report whether the board is reachable on serial — sends no attack.
+
+        Useful before a demo: confirms the port opened and the firmware answers.
+        """
+        info = {"mode": self.mode, "firmware": self.firmware, "port": self.port}
+        if self._ser is None:
+            info["ok"] = False
+            info["reason"] = ("no serial board (mock) — check cable / USB-serial "
+                              "driver / dialout group / --port")
+            return info
+        resp = self._send(self.cmd["stop"], settle=0.6)   # harmless: stop any task
+        info["ok"] = True
+        info["responded"] = bool(resp.strip())
+        info["sample"] = resp.strip()[:120]
+        return info
+
     def stop(self) -> None:
         try:
             self._send(self.cmd["stop"])
@@ -257,12 +274,18 @@ def main(argv=None):
     p.add_argument("--index", type=int, default=None,
                    help="skip scan; deauth this AP index directly (best for web-UI-only builds)")
     p.add_argument("--port", default=None, help="serial port (auto-detect if omitted)")
+    p.add_argument("--selftest", action="store_true",
+                   help="check the board answers on serial (sends no attack) and exit")
     p.add_argument("--force-mock", action="store_true")
     args = p.parse_args(argv)
 
     d = DeauthESP32(port=args.port, authorized=args.authorized,
                     firmware=args.firmware, force_mock=args.force_mock)
     print(f"mode: {d.mode}  firmware: {d.firmware}  port: {d.port}")
+    if args.selftest:
+        print(json.dumps(d.selftest()))
+        d.close()
+        return
     print(json.dumps(d.run_targeted(args.ssid, args.duration, args.index)))
     # Refusal proof: an SSID that is not ours must be declined.
     print("other AP ->", json.dumps(d.run_targeted("Neighbour_5G", args.duration)))
