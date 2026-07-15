@@ -192,8 +192,8 @@ def parse_args(argv=None):
     p.add_argument("--deauth", action="store_true",
                    help="fire the ESP deauth to free the single client slot first")
     p.add_argument("--deauth-firmware", choices=["marauder", "deauther"],
-                   default=os.environ.get("DEAUTH_FW", "marauder"),
-                   help="marauder (ESP32) or deauther (ESP8266). Default $DEAUTH_FW/marauder")
+                   default=os.environ.get("DEAUTH_FW", "deauther"),
+                   help="deauther (ESP8266) or marauder (ESP32). Default $DEAUTH_FW/deauther")
     p.add_argument("--deauth-seconds", type=float, default=6.0)
     p.add_argument("--deauth-index", type=int, default=None,
                    help="skip the ESP scan and deauth this AP index directly")

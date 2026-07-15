@@ -17,7 +17,7 @@ With no Tello reachable (e.g. still on the internet) it runs in mock and only
 prints what it *would* do.
 """
 from __future__ import annotations
-import os, socket
+import os, socket, time
 
 TELLO_HOST = os.environ.get("TELLO_HOST", "192.168.10.1")
 TELLO_PORT = int(os.environ.get("TELLO_PORT", "8889"))
@@ -54,7 +54,10 @@ class TelloDefence:
         self._sock.settimeout(timeout)
         try:
             data, _ = self._sock.recvfrom(1024)
-            return data.decode(errors="ignore").strip()
+            # ASCII-only: Tello acks are 'ok'/'error'/numbers. Dropping non-ASCII
+            # bytes here stops a stray/binary packet from crashing the Windows
+            # console (cp1252) when we print the ack (UnicodeEncodeError).
+            return data.decode("ascii", "ignore").strip()
         except OSError:
             return ""
 
@@ -78,8 +81,21 @@ class TelloDefence:
                 self._sock.bind(("", TELLO_PORT))
             except OSError:
                 self._sock.bind(("", 0))  # fall back to ephemeral if 8889 is busy
+            # Enter SDK mode; the Tello needs a moment before it accepts motion cmds.
             ack1 = self._send("command")
-            ack2 = self._send("land", timeout=6.0)
+            time.sleep(1.5)
+            self._send("command")            # some units want it twice to lock SDK mode
+            time.sleep(0.8)
+            # Land, retrying: 'error' usually means "not airborne yet / still settling".
+            # Between tries, neutralize any drift with a hover rc so it's landable.
+            ack2 = ""
+            for attempt in range(4):
+                ack2 = self._send("land", timeout=7.0)
+                print(f"[tello] land attempt {attempt+1}: {ack2!r}")
+                if "ok" in ack2.lower():
+                    break
+                self._send("rc 0 0 0 0")     # stop drift
+                time.sleep(1.5)
             sent = "ok" in (ack1 + ack2).lower()
             print(f"[tello] own-drone '{who}' -> command={ack1!r} land={ack2!r}")
             return {"action": "land", "target": who, "mode": "tello-udp",

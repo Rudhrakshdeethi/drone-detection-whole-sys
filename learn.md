@@ -3,8 +3,8 @@
 This explains the DRONEWATCH / CampusShield counter-drone system the way the code
 actually runs it, plus the two new pieces added for the Raspberry Pi demo:
 
-- `ml/runtime/deauth_esp32.py` — drives the deauth board (**ESP32/Marauder** by
-  default; ESP8266/Deauther also supported) to deauth **your own** drone's AP.
+- `ml/runtime/deauth_esp32.py` — drives the deauth board (**ESP8266/Deauther** by
+  default; ESP32/Marauder also supported) to deauth **your own** drone's AP.
 - `ml/runtime/interceptor.py` — the Pi's Linux orchestrator (nmcli) that joins the
   drone, sends LAND, and rejoins the house WiFi.
 
@@ -18,11 +18,11 @@ actually runs it, plus the two new pieces added for the Raspberry Pi demo:
 
 | Box | Role | The one job only it can do |
 |-----|------|-----------------------------|
-| **ESP32 (Marauder)** | deauth radio | transmit 802.11 deauth to knock the pilot's phone off the drone's WiFi |
-| **Raspberry Pi 5** | interceptor brain | detect → trigger ESP32 → join the freed drone link → send LAND → host the backend |
+| **ESP8266 (Deauther)** | deauth radio | transmit 802.11 deauth to knock the pilot's phone off the drone's WiFi |
+| **Raspberry Pi 5** | interceptor brain | detect → trigger ESP8266 → join the freed drone link → send LAND → host the backend |
 | **Laptop** | operator console | show the DRONEWATCH dashboard over the house WiFi |
 
-The reason the ESP32 exists: the Pluto/Tello AP is **first-connection-holds** — while
+The reason the ESP8266 exists: the Pluto/Tello AP is **first-connection-holds** — while
 the phone holds the single client slot, the Pi is refused. A short **targeted** deauth
 frees the slot; the Pi grabs it within a couple of seconds and lands the drone.
 
@@ -37,7 +37,7 @@ There are two independent loops. Understand them separately.
 score, and writes each verdict to `reports/live_detections.csv`.
 
 ### Workflow B — INTERCEPT & LAND (the on-demand action)
-When you decide to act, the ESP32 deauths, the Pi joins the drone, and a LAND is sent.
+When you decide to act, the ESP8266 deauths, the Pi joins the drone, and a LAND is sent.
 This is `ml/runtime/interceptor.py` (Pi) or `interceptor.ps1` (Windows), and the LAND
 button on the dashboard hits the same `pluto_control` code.
 
@@ -160,22 +160,22 @@ PLUTO_SSID=Pluto_2025_2242 python -m ml.runtime.dashboard --host 0.0.0.0 --port 
 
 ## 5. THE ADDITIONS
 
-### 5a. `ml/runtime/deauth_esp32.py` — the ESP deauth driver (NEW; ESP32/Marauder default)
+### 5a. `ml/runtime/deauth_esp32.py` — the ESP deauth driver (ESP8266/Deauther default)
 
 Before this file, **nothing in the repo drove the deauth board** — the only `esp32`
 references were the ESP32-*CAM* video stream. This closes that gap. **We drive an
-ESP32 running Marauder** (the default). An ESP8266 running Spacehuhn's Deauther 2.x
-also works — the class carries both dialects.
+ESP8266 running Spacehuhn Deauther 2.x** (the default). An ESP32 running Marauder also
+works — the class carries both dialects. (File name is historical; it's board-agnostic.)
 
-**The board defaults to `marauder` (ESP32).** Override with `firmware="deauther"` (or
-`$DEAUTH_FW=deauther`) only for an ESP8266, because the serial CLI words differ:
+**The board defaults to `deauther` (ESP8266).** Override with `firmware="marauder"` (or
+`$DEAUTH_FW=marauder`) only for an ESP32, because the serial CLI words differ:
 
-| | `firmware="marauder"` (ESP32, default) | `firmware="deauther"` (ESP8266) |
+| | `firmware="deauther"` (ESP8266, default) | `firmware="marauder"` (ESP32) |
 |---|---|---|
-| scan | `scanap` | `scan ap` |
-| list | `list -a` | `show ap` |
-| select | `select -a <idx>` | `select ap <idx>` |
-| attack | `attack -t deauth` | `attack deauth` |
+| scan | `scan ap` | `scanap` |
+| list | `show ap` | `list -a` |
+| select | `select ap <idx>` | `select -a <idx>` |
+| attack | `attack deauth` | `attack -t deauth` |
 | stop | `stop` | `stop` |
 
 Both are 2.4 GHz — fine for Pluto/Tello. The dialects live in the `FIRMWARES` dict at the
@@ -197,15 +197,16 @@ What it does, method by method:
   `stop`. Targeted (one AP), never broadcast.
 - **`mode`** — reports `serial` (real board) or `mock` (dry).
 
-Test it (mock, anywhere — ESP32/Marauder is the default, no flag needed):
+Test it (mock, anywhere — ESP8266/Deauther is the default, no flag needed):
 ```bash
 python -m ml.runtime.deauth_esp32 --force-mock --ssid Pluto_2025_2242
-# ESP8266 instead? add --firmware deauther
+# ESP32 instead? add --firmware marauder
 # refusal proof: a non-allow-listed SSID returns {"action":"none", ...}
 ```
 On the Pi with the board plugged in, drop `--force-mock`. Add the Pi user to `dialout`
 first (`sudo usermod -aG dialout $USER`, then re-login) for serial access. Flash the
-ESP32 with **Marauder** (ESP Web Tools / esptool) and confirm the serial CLI at 115200.
+ESP8266 with **Deauther 2.x** (serial build; web installer / esptool) and confirm the
+serial CLI at 115200. Full setup: **`esp8266setup.md`**.
 
 > **If a scan returns no APs:** the firmware's list layout may differ from the parser.
 > Pass an explicit `--index N` (the drone AP is usually the strongest/only `Pluto_*`)
@@ -233,12 +234,12 @@ Rehearse the entire sequence in mock (touches no radio):
 python -m ml.runtime.interceptor --dry-run --deauth \
   --drone-ssid Pluto_2025_2242 --house NxtWave_Te@m
 ```
-Real run on the Pi (ESP32/Marauder is the default deauth board):
+Real run on the Pi (ESP8266/Deauther is the default deauth board):
 ```bash
 python -m ml.runtime.interceptor --deauth \
   --drone-prefix Pluto --password <this-session-pw> --house <house-ssid>
 ```
-Using an ESP8266 instead? Add `--deauth-firmware deauther` (or `export DEAUTH_FW=deauther`).
+Using an ESP32 instead? Add `--deauth-firmware marauder` (or `export DEAUTH_FW=marauder`).
 
 ---
 
@@ -251,8 +252,8 @@ sudo apt update && sudo apt install -y rtl-sdr network-manager python3-pip git
 git clone <this-repo> && cd drone-detection-whole-sys
 pip install -r requirements-core.txt -r requirements-runtime.txt
 pip install plutocontrol pyserial
-# 6.3  serial access to the ESP32 (log out/in after)
-sudo usermod -aG dialout $USER   # ESP32/Marauder is the default; ESP8266 => export DEAUTH_FW=deauther
+# 6.3  serial access to the ESP8266 (log out/in after)
+sudo usermod -aG dialout $USER   # ESP8266/Deauther is the default; ESP32 => export DEAUTH_FW=marauder
 # 6.4  prove the ML stack runs on the Pi (mock, no drone needed)
 python run_all.py
 # 6.5  prove each new piece in mock
@@ -298,7 +299,7 @@ independent of your SSH session, so the WiFi hop can't kill it.
 
 1. Phone flies the drone.
 2. Operator triggers INTERCEPT (dashboard LAND, or `interceptor.py --deauth`).
-3. ESP32 deauth fires; **phone visibly loses control** (no manual disconnect).
+3. ESP8266 deauth fires; **phone visibly loses control** (no manual disconnect).
 4. Pi joins the freed drone slot within a few seconds.
 5. Pi sends LAND; **drone lands**.
 6. Pi rejoins house WiFi; laptop SSH/dashboard reconnects; log shows `commanded land`.
