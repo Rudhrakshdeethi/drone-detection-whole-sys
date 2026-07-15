@@ -1,5 +1,10 @@
 # CampusShield — ML Subsystem (Part A)
 
+> **New here / just want to run it?** → **[RUN.md](RUN.md)** has every command
+> (laptop mock + Raspberry Pi real). **[learn.md](learn.md)** explains how the
+> whole workflow works line by line. **[HARDWARE.md](HARDWARE.md)** is the
+> pre-demo provisioning checklist.
+
 Machine-learning stack for the drone-detection system. Everything here involves
 **training data → model → inference**. Part B (DSP / engineering / integration)
 lives elsewhere and is intentionally kept out of this folder.
