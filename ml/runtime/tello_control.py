@@ -17,7 +17,7 @@ With no Tello reachable (e.g. still on the internet) it runs in mock and only
 prints what it *would* do.
 """
 from __future__ import annotations
-import os, socket
+import os, socket, time
 
 TELLO_HOST = os.environ.get("TELLO_HOST", "192.168.10.1")
 TELLO_PORT = int(os.environ.get("TELLO_PORT", "8889"))
@@ -54,13 +54,27 @@ class TelloDefence:
         self._sock.settimeout(timeout)
         try:
             data, _ = self._sock.recvfrom(1024)
-            return data.decode(errors="ignore").strip()
+            # ASCII-only: Tello acks are 'ok'/'error'/numbers. Dropping non-ASCII
+            # bytes here stops a stray/binary packet from crashing the Windows
+            # console (cp1252) when we print the ack (UnicodeEncodeError).
+            return data.decode("ascii", "ignore").strip()
         except OSError:
             return ""
 
     # ---- public ---------------------------------------------------------------
-    def engage(self, verdict: dict) -> dict:
-        """Land our own Tello IFF every safety gate passes."""
+    def engage(self, verdict: dict, method: str = "land") -> dict:
+        """Bring our own Tello down IFF every safety gate passes.
+
+        ``method="land"`` (default) does a controlled descent — gentle, but the
+        SDK blocks for the whole touchdown (several seconds). ``method="emergency"``
+        sends the Tello ``emergency`` command, which **cuts all four motors at
+        once** and returns almost immediately. The drone drops, so it is only safe
+        from low altitude / over something soft — but it is the instant "kill" when
+        the controlled land is taking too long.
+        """
+        method = (method or "land").lower()
+        if method not in ("land", "emergency"):
+            method = "land"
         if not self.enabled:
             return {"action": "none", "reason": "tello response disabled"}
         who = self.match(verdict)
@@ -68,8 +82,8 @@ class TelloDefence:
             return {"action": "none",
                     "reason": "not an authorized own-drone (allow-list miss)"}
         if self.force_mock:
-            print(f"[tello] (mock) would LAND own drone '{who}' - no drone reachable")
-            return {"action": "land", "target": who, "mode": "mock", "sent": False}
+            print(f"[tello] (mock) would {method.upper()} own drone '{who}' - no drone reachable")
+            return {"action": method, "target": who, "mode": "mock", "sent": False}
         try:
             self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -78,8 +92,38 @@ class TelloDefence:
                 self._sock.bind(("", TELLO_PORT))
             except OSError:
                 self._sock.bind(("", 0))  # fall back to ephemeral if 8889 is busy
+            # Enter SDK mode; the Tello needs a moment before it accepts motion cmds.
             ack1 = self._send("command")
-            ack2 = self._send("land", timeout=6.0)
+            time.sleep(1.5)
+            self._send("command")            # some units want it twice to lock SDK mode
+            time.sleep(0.8)
+            if method == "emergency":
+                # Instant motor cutoff. It returns fast and doesn't care whether the
+                # drone is "settled", so we just hammer it a few times to be sure the
+                # UDP packet lands, and take the first ack we get.
+                ack2 = ""
+                for attempt in range(3):
+                    a = self._send("emergency", timeout=2.0)
+                    print(f"[tello] emergency attempt {attempt+1}: {a!r}")
+                    ack2 = a or ack2
+                    if "ok" in a.lower():
+                        break
+                    time.sleep(0.3)
+                sent = "ok" in (ack1 + ack2).lower()
+                print(f"[tello] own-drone '{who}' -> command={ack1!r} emergency={ack2!r}")
+                return {"action": "emergency", "target": who, "mode": "tello-udp",
+                        "method": "emergency", "sent": sent,
+                        "ack": ack2 or ack1 or "no-reply"}
+            # Land, retrying: 'error' usually means "not airborne yet / still settling".
+            # Between tries, neutralize any drift with a hover rc so it's landable.
+            ack2 = ""
+            for attempt in range(4):
+                ack2 = self._send("land", timeout=7.0)
+                print(f"[tello] land attempt {attempt+1}: {ack2!r}")
+                if "ok" in ack2.lower():
+                    break
+                self._send("rc 0 0 0 0")     # stop drift
+                time.sleep(1.5)
             sent = "ok" in (ack1 + ack2).lower()
             print(f"[tello] own-drone '{who}' -> command={ack1!r} land={ack2!r}")
             return {"action": "land", "target": who, "mode": "tello-udp",
@@ -108,13 +152,16 @@ def main(argv=None):
     p.add_argument("--enabled", action="store_true")
     p.add_argument("--force-mock", action="store_true")
     p.add_argument("--ssid", default="TELLO-954B1F")
+    p.add_argument("--emergency", action="store_true",
+                   help="cut motors instantly (Tello 'emergency') instead of a controlled land")
     args = p.parse_args(argv)
+    method = "emergency" if args.emergency else "land"
     td = TelloDefence(authorized=args.authorized, enabled=args.enabled, force_mock=args.force_mock)
-    print(f"mode: {td.mode}")
+    print(f"mode: {td.mode}  method: {method}")
     own = {"wifi_hits": [{"ssid": args.ssid, "model": "Tello"}]}
     other = {"wifi_hits": [{"ssid": "DJI-Mavic-9Z", "model": "Mavic 3"}]}
-    print("own drone  ->", json.dumps(td.engage(own)))
-    print("other drone->", json.dumps(td.engage(other)))
+    print("own drone  ->", json.dumps(td.engage(own, method=method)))
+    print("other drone->", json.dumps(td.engage(other, method=method)))
     td.close()
 
 

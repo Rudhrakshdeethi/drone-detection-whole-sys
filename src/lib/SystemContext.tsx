@@ -15,7 +15,8 @@ interface SystemState {
   loading: boolean
   /** ISO-ish time of the last successful poll, for the header readout. */
   lastUpdate: number | null
-  land: () => Promise<LastLand>
+  /** Bring the own drone down. `emergency` cuts motors instantly (Tello). */
+  land: (emergency?: boolean) => Promise<LastLand>
 }
 
 const SystemCtx = createContext<SystemState | null>(null)
@@ -73,18 +74,18 @@ export function SystemProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  const land = async () => {
+  const land = async (emergency = false) => {
     let result: LastLand
     if (connected) {
-      result = await postLand()
+      result = await postLand(emergency)
     } else {
       // No backend reachable — simulate the landing so the demo still responds.
       const who = TARGET_SSID || 'target drone'
-      await new Promise(r => setTimeout(r, 700))
+      await new Promise(r => setTimeout(r, emergency ? 250 : 700))
       result = {
-        action: 'land',
+        action: emergency ? 'emergency' : 'land',
         at: new Date().toTimeString().slice(0, 8),
-        detail: `LAND commanded to '${who}' (demo — no backend reachable)`,
+        detail: `${emergency ? 'EMERGENCY (motor cutoff)' : 'LAND'} commanded to '${who}' (demo — no backend reachable)`,
       }
     }
     // Fold the outcome straight back into the snapshot so the whole UI reacts

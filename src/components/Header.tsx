@@ -168,7 +168,7 @@ function ConnectionBadge({ connected, lastUpdate }: { connected: boolean; lastUp
   )
 }
 
-type LandState = { action: 'idle' | 'land' | 'none' | 'error'; detail: string } | null
+type LandState = { action: 'idle' | 'land' | 'emergency' | 'none' | 'error'; detail: string } | null
 
 function LandControl({
   connected,
@@ -178,40 +178,45 @@ function LandControl({
 }: {
   connected: boolean
   armed: boolean
-  land: () => Promise<{ action: string; detail: string }>
+  land: (emergency?: boolean) => Promise<{ action: string; detail: string }>
   lastLand: LandState
 }) {
   const target = useTarget()
-  const [phase, setPhase] = useState<'idle' | 'armed' | 'sending'>('idle')
+  // `phase` tracks which button (if any) is mid-flow: null = idle, else the
+  // active command plus whether it's confirming (armed) or already sending.
+  const [phase, setPhase] = useState<
+    { cmd: 'land' | 'kill'; step: 'armed' | 'sending' } | null
+  >(null)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current) }, [])
 
-  // Landing is available whenever we have a target to land: either the backend
-  // has an armed link, or the operator named a drone via VITE_SSID.
+  // Available whenever we have a target: either the backend has an armed link,
+  // or the operator named a drone via VITE_SSID.
   const disabled = !(armed || target.configured)
-  const onClick = async () => {
-    if (disabled || phase === 'sending') return
-    if (phase === 'idle') {
-      setPhase('armed')
-      timer.current = setTimeout(() => setPhase('idle'), 4000)
+  const sending = phase?.step === 'sending'
+
+  const press = (cmd: 'land' | 'kill') => async () => {
+    if (disabled || sending) return
+    // First press on a fresh/other button → arm it (needs a confirming second press).
+    if (phase?.cmd !== cmd || phase.step !== 'armed') {
+      if (timer.current) clearTimeout(timer.current)
+      setPhase({ cmd, step: 'armed' })
+      timer.current = setTimeout(() => setPhase(null), 4000)
       return
     }
-    // armed -> execute
+    // Armed → execute.
     if (timer.current) clearTimeout(timer.current)
-    setPhase('sending')
+    setPhase({ cmd, step: 'sending' })
     try {
-      await land()
+      await land(cmd === 'kill')
     } finally {
-      setPhase('idle')
+      setPhase(null)
     }
   }
 
-  const label =
-    phase === 'sending' ? 'SENDING…' : phase === 'armed' ? '⚠ CONFIRM LAND' : 'LAND'
-  const color = disabled ? '#2d4f32' : phase === 'armed' ? '#ff8c00' : '#ff3131'
-
   const outcome = lastLand && lastLand.action !== 'idle' ? lastLand : null
+  const okColor = outcome?.action === 'land' || outcome?.action === 'emergency'
   const idleNote = target.configured
     ? target.detected
       ? `target ${target.ssid} · locked`
@@ -220,39 +225,42 @@ function LandControl({
 
   return (
     <div className="flex flex-col items-center gap-0.5">
-      <button
-        onClick={onClick}
-        disabled={disabled}
-        className={phase === 'armed' ? 'blink' : ''}
-        title={
-          disabled
-            ? 'No target set — add VITE_SSID to .env.local (or set PLUTO_SSID on the backend)'
-            : target.configured
-              ? `Commands drone '${target.ssid}' to LAND${connected ? '' : ' (demo — backend offline)'}`
-              : 'Own-drone LAND only — allow-list gated, never jams third-party aircraft'
-        }
-        style={{
-          background: disabled ? 'transparent' : `${color}1a`,
-          border: `1px solid ${disabled ? '#1a3320' : color}`,
-          color,
-          padding: '5px 12px',
-          fontSize: '10px',
-          fontWeight: 700,
-          letterSpacing: '1.5px',
-          cursor: disabled ? 'not-allowed' : phase === 'sending' ? 'progress' : 'pointer',
-          fontFamily: 'inherit',
-          borderRadius: 3,
-          whiteSpace: 'nowrap',
-        }}
-      >
-        {label}
-      </button>
+      <div className="flex items-center gap-1.5">
+        <CmdButton
+          disabled={disabled}
+          phase={phase?.cmd === 'land' ? phase.step : null}
+          onClick={press('land')}
+          idleLabel="LAND"
+          armedLabel="⚠ CONFIRM LAND"
+          idleColor="#ff3131"
+          title={
+            disabled
+              ? 'No target set — add VITE_SSID to .env.local (or set PLUTO_SSID on the backend)'
+              : target.configured
+                ? `Controlled descent for '${target.ssid}'${connected ? '' : ' (demo — backend offline)'}`
+                : 'Own-drone LAND only — allow-list gated, never jams third-party aircraft'
+          }
+        />
+        <CmdButton
+          disabled={disabled}
+          phase={phase?.cmd === 'kill' ? phase.step : null}
+          onClick={press('kill')}
+          idleLabel="KILL"
+          armedLabel="⚠ CUT MOTORS"
+          idleColor="#ff8c00"
+          title={
+            disabled
+              ? 'No target set — add VITE_SSID to .env.local'
+              : `EMERGENCY motor cutoff for '${target.ssid || 'own drone'}' — instant, the drone drops. Low altitude only.${connected ? '' : ' (demo — backend offline)'}`
+          }
+        />
+      </div>
       <div
         style={{
           fontSize: '7px',
           letterSpacing: '0.5px',
-          color: outcome?.action === 'land' ? '#00ff41' : outcome?.action === 'error' ? '#ff3131' : '#2d4f32',
-          maxWidth: 150,
+          color: okColor ? '#00ff41' : outcome?.action === 'error' ? '#ff3131' : '#2d4f32',
+          maxWidth: 190,
           overflow: 'hidden',
           textOverflow: 'ellipsis',
           whiteSpace: 'nowrap',
@@ -262,6 +270,50 @@ function LandControl({
         {outcome ? outcome.detail : idleNote}
       </div>
     </div>
+  )
+}
+
+function CmdButton({
+  disabled,
+  phase,
+  onClick,
+  idleLabel,
+  armedLabel,
+  idleColor,
+  title,
+}: {
+  disabled: boolean
+  phase: 'armed' | 'sending' | null
+  onClick: () => void
+  idleLabel: string
+  armedLabel: string
+  idleColor: string
+  title: string
+}) {
+  const label = phase === 'sending' ? 'SENDING…' : phase === 'armed' ? armedLabel : idleLabel
+  const color = disabled ? '#2d4f32' : phase === 'armed' ? '#ff8c00' : idleColor
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className={phase === 'armed' ? 'blink' : ''}
+      title={title}
+      style={{
+        background: disabled ? 'transparent' : `${color}1a`,
+        border: `1px solid ${disabled ? '#1a3320' : color}`,
+        color,
+        padding: '5px 12px',
+        fontSize: '10px',
+        fontWeight: 700,
+        letterSpacing: '1.5px',
+        cursor: disabled ? 'not-allowed' : phase === 'sending' ? 'progress' : 'pointer',
+        fontFamily: 'inherit',
+        borderRadius: 3,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {label}
+    </button>
   )
 }
 

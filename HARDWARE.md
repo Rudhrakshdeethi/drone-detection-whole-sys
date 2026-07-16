@@ -1,7 +1,7 @@
 # Counter-Drone Interceptor - hardware provisioning checklist
 
 What the hardware team must configure **before the unit is placed / demoed.**
-Architecture: **ESP deauther (ESP8266 or ESP32) + Raspberry Pi 5 (interceptor brain) + laptop (console)**.
+Architecture: **ESP deauther (ESP8266 default, or ESP32) + Raspberry Pi 5 (interceptor brain) + laptop (console)**.
 Roles:
 - **ESP deauther (ESP8266/ESP32)** - transmits 802.11 deauth to knock the pilot's phone off the drone's WiFi (the one radio job the Pi/laptop can't do).
 - **Pi 5** - detects, triggers the ESP deauther, joins the freed drone link, sends LAND; hosts the backend.
@@ -12,28 +12,24 @@ Roles:
 
 ---
 
-## 1. ESP deauther module (ESP8266 **or** ESP32)
-Pick the firmware to match your board, then tell the software which with
-`--deauth-firmware` / `$DEAUTH_FW` (see `learn.md` §5a). The driver
-(`ml/runtime/deauth_esp32.py`) speaks both dialects.
+## 1. ESP8266 deauther module (Deauther — what we use)
+We drive an **ESP8266 running Spacehuhn Deauther 2.x**. It is the software default
+(firmware token `deauther`), so no flag is needed. The driver (`ml/runtime/deauth_esp32.py`)
+also supports an ESP32/Marauder — see the note at the end. Full setup: **`esp8266setup.md`**.
 
-**If ESP8266 (NodeMCU / Wemos D1 mini — what we have):**
-- [ ] USB-serial chip is usually **CH340** - install the CH340 driver (Windows/Linux).
-- [ ] Flash **Spacehuhn "ESP8266 Deauther" 2.x** with the **serial CLI enabled** (115200). Flash from [deauther.com](https://deauther.com) (ESP Web Tools) or nodemcu-pyflasher.
-- [ ] Confirm serial control at **115200 baud**: `scan ap` -> `show ap` -> `select ap <id>` -> `attack deauth` -> `stop`. Software firmware token: `deauther`.
-- [ ] If your build is **web-UI-only** (ignores serial), pass an explicit `--index N` (the drone AP is usually the strongest/only `Pluto_*`) or drive it over its own web AP.
-- [ ] ESP8266 is **2.4 GHz only** - fine, Pluto/Tello are 2.4 GHz.
-
-**If ESP32 (S2 / S3 / C3 / original):**
-- [ ] USB-serial chip is **CP210x or CH340** - install the matching driver.
-- [ ] Flash **ESP32 Marauder** (serial CLI). Web-flasher or esptool. Software firmware token: `marauder`.
-- [ ] Confirm serial control at **115200 baud**: `scanap` -> `list -a` -> `select -a <id>` -> `attack -t deauth` -> `stop`.
-
-**Both boards:**
-- [ ] Verify it **actually deauths a client**: connect the demo phone to the drone AP, run the deauth, confirm the phone drops.
+- [ ] Identify the USB-serial chip (**CH340** on most NodeMCU, or CP210x) - install the matching driver.
+- [ ] Flash **ESP8266 Deauther 2.x** firmware — a **serial-enabled** build so the Pi can drive it headless (115200). Deauther web installer or esptool.
+- [ ] Confirm serial control at **115200 baud**: `scan ap` -> `show ap` -> `select ap <id>` -> `attack deauth` -> `stop`.
+- [ ] Verify it **actually deauths a client**: connect the demo phone to the drone AP, run the deauth, confirm the phone drops (2.4 GHz - Pluto/Tello are 2.4 GHz, and ESP8266 is 2.4 GHz only - good).
 - [ ] Prefer **targeted** deauth (the one drone AP) over broadcast, so it does not also kick the Pi. The driver refuses any SSID not on the allow-list.
+- [ ] If a scan lists no APs (or a web-UI-only build), pass an explicit `--index N` (the drone AP is usually the strongest/only `Pluto_*`) to skip the scan.
 - [ ] Note **MAC randomization**: modern phones use a random MAC per SSID - capture the phone's actual MAC on the drone network if you target by client MAC.
-- [ ] Antenna: if range is weak, use a board with a u.FL external antenna.
+
+> **ESP32 alternative:** if you use an ESP32 instead, flash **Marauder** (serial CLI,
+> 115200) and run the software with `--deauth-firmware marauder` (or
+> `export DEAUTH_FW=marauder`). Its CLI is
+> `scanap / list -a / select -a <id> / attack -t deauth / stop`. An ESP32 with a u.FL
+> external antenna helps range.
 
 ## 2. Raspberry Pi 5 (interceptor brain)
 - [ ] Raspberry Pi OS (64-bit), fully updated; **SSH enabled**; a fixed hostname (e.g. `interceptor.local`) so the laptop can reach it without Ethernet (mDNS).

