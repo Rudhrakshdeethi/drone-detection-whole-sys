@@ -60,7 +60,7 @@ export interface FeedRow {
 }
 
 export interface LastLand {
-  action: 'idle' | 'land' | 'none' | 'error'
+  action: 'idle' | 'land' | 'emergency' | 'none' | 'error'
   at: string | null
   detail: string
   raw?: unknown
@@ -112,8 +112,13 @@ export function getConfig(): Promise<ConfigInfo> {
   return req<ConfigInfo>('/api/config')
 }
 
-export function postLand(): Promise<LastLand> {
-  return req<LastLand>('/api/land', { method: 'POST' }, 8000)
+export function postLand(emergency = false): Promise<LastLand> {
+  return req<LastLand>('/api/land', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ emergency }),
+    // Emergency returns fast; the controlled land can block for the whole descent.
+  }, emergency ? 4000 : 8000)
 }
 
 export function saveConfig(body: {

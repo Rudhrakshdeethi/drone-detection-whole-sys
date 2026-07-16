@@ -141,15 +141,20 @@ A standard-library-only web server (no Flask), so it runs anywhere the runtime d
   rows of `live_detections.csv` and derive the threat gauge, sensor grid, and
   localization read-out **honestly from the real data** (a sensor shows "active" only if
   recent rows actually populated its field).
-- **`_command_land()`** (line ~154) — the LAND button's server handler. It routes by SSID:
-  `TELLO*`/`RMTT*` → `TelloDefence`, else → `PlutoDefence`, builds a synthetic own-drone
-  verdict so the allow-list authorizes it, calls `engage()`, and records the result.
+- **`_command_land(method)`** (line ~154) — the LAND button's server handler. It routes by
+  SSID: `TELLO*`/`RMTT*` → `TelloDefence`, else → `PlutoDefence`, builds a synthetic own-drone
+  verdict so the allow-list authorizes it, calls `engage(method=...)`, and records the result.
+  `method="emergency"` (set when `/api/land` gets `{"emergency": true}`) makes a Tello cut its
+  motors instantly via the SDK `emergency` command instead of a controlled `land` descent —
+  fast but the drone drops (Tello only; Pluto falls back to its normal land).
 - **HTTP routes** (lines ~215–251): `GET /api/status` (the snapshot the UI polls every
   1.2s), `POST /api/land` (fires the LAND), `GET/POST /api/config` (host/port/ssid;
   the **SSID stays server-side** and is never shown on the main console).
 - **Front-end** (the `PAGE` string): the LAND button is **two-tap** — one tap arms, a
   second within 4s executes (`land.onclick`, line ~483). The SSID lives in a hidden panel
   opened by pressing `` ` `` (backtick), triple-clicking the logo, or the dim corner dot.
+  (The React console in `src/` adds a second two-tap **KILL** button beside LAND that posts
+  `{"emergency": true}` for the instant Tello motor cutoff — see `src/components/Header.tsx`.)
 
 Run it:
 ```bash

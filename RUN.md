@@ -30,6 +30,31 @@ auto-routed by drone type. Run from the repo root with the ESP8266 on `COM8`.
 - Detect-only, no ESP needed: **`.\detect_drone.ps1`** (add `-Watch` to keep scanning).
 - Internet drops during `-Engage` (one radio) and is restored at the end; full log in `counter-log.md`.
 
+### Tello: LAND (gentle) vs KILL (instant motor cutoff)
+
+The Tello has two ways down. **LAND** is a controlled descent — safe, but the SDK
+blocks for the whole touchdown (several seconds), so it looks slow. **KILL** sends
+the Tello `emergency` command, which **cuts all four motors at once** and returns
+instantly. The drone then *drops* — so KILL is low-altitude / over-something-soft
+only; from height it risks the props/arms.
+
+```powershell
+.\Land-Tello-Now.bat                                   # gentle controlled LAND (double-click)
+.\Kill-Tello-Now.bat                                   # INSTANT motor cutoff — drone drops
+
+# same one-shot, explicit (seizes link -> command -> restores internet):
+powershell -ExecutionPolicy Bypass -File land_tello_oneshot.ps1              # LAND
+powershell -ExecutionPolicy Bypass -File land_tello_oneshot.ps1 -Emergency   # KILL
+
+# if you already hold the Tello link, skip the WiFi seize:
+python -m ml.runtime.tello_control --enabled --authorized TELLO-954B1F --ssid TELLO-954B1F              # LAND
+python -m ml.runtime.tello_control --enabled --authorized TELLO-954B1F --ssid TELLO-954B1F --emergency # KILL
+```
+
+In the **dashboard header** the same pair sits beside the threat chip: `LAND` (red)
+for the controlled descent, `KILL` (orange) for the emergency cutoff. Both are
+two-press (arm → confirm) so neither fires by accident.
+
 ---
 
 ## 0. TL;DR — 60-second dry run (any laptop, no hardware)
@@ -230,6 +255,8 @@ Serial port auto-detects; override with `--port /dev/ttyUSB0` or `$DEAUTH_PORT`.
 | Detector (real) | `python -m ml.runtime.live_detector` |
 | Detector (demo) | `python -m ml.runtime.live_detector --mock --simulate-ssid Pluto_2025_2242` |
 | Land (connected) | `python -m ml.runtime.pluto_control --enabled --authorized Pluto --ssid <ssid>` |
+| Tello LAND (one-shot) | `.\Land-Tello-Now.bat`  ·  `land_tello_oneshot.ps1` |
+| Tello KILL / motor cutoff | `.\Kill-Tello-Now.bat`  ·  `land_tello_oneshot.ps1 -Emergency` |
 | Deauth self-test | `python -m ml.runtime.deauth_esp32 --selftest` |
 | Deauth test | `python -m ml.runtime.deauth_esp32 --ssid <ssid>` (ESP8266/Deauther default) |
 | Full intercept | `python -m ml.runtime.interceptor --deauth --drone-prefix Pluto --house <wifi>` |

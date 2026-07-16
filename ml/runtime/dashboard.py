@@ -32,7 +32,7 @@ Pair it with the detector in another terminal so the feed populates:
       python -m ml.runtime.live_detector --mock --simulate-ssid DJI-Mavic-1A2B
 """
 from __future__ import annotations
-import os, sys, csv, json, time, argparse, threading, webbrowser
+import os, sys, csv, json, time, argparse, threading, webbrowser, platform, shutil, ctypes
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -53,17 +53,51 @@ _LOCK = threading.Lock()
 
 
 # ---- detection feed ----------------------------------------------------------
-def _tail_detections(limit: int = 25) -> list[dict]:
-    """Return the most recent detection rows (newest first), robust to a
-    concurrently-written CSV."""
+def _read_all() -> list[dict]:
+    """All detection rows (oldest first), robust to a concurrently-written CSV."""
     if not os.path.exists(CSV_PATH):
         return []
     try:
         with open(CSV_PATH, "r", encoding="utf-8", newline="") as f:
-            rows = list(csv.DictReader(f))
+            return list(csv.DictReader(f))
     except Exception:
         return []
-    return list(reversed(rows[-limit:]))
+
+
+def _tail_detections(limit: int = 25) -> list[dict]:
+    """Return the most recent detection rows (newest first)."""
+    return list(reversed(_read_all()[-limit:]))
+
+
+def _stream_status() -> dict:
+    """Is the detector actually writing? Honest heartbeat from the CSV's mtime —
+    no fake 'online' lights, just whether fresh rows are landing."""
+    try:
+        age = time.time() - os.path.getmtime(CSV_PATH)
+    except OSError:
+        return {"live": False, "age_s": None, "label": "no stream"}
+    live = age < 15
+    return {"live": live, "age_s": int(age),
+            "label": "live" if live else f"stale {int(age)}s"}
+
+
+def _analytics(rows: "list[dict] | None" = None) -> dict:
+    """Today's tally, computed from the real detection log (nothing invented).
+    Pass ``rows`` to reuse an already-loaded CSV (avoids a second read per poll —
+    matters on the Pi where the log grows)."""
+    if rows is None:
+        rows = _read_all()
+    today = time.strftime("%Y-%m-%d")
+    todays = [r for r in rows if (r.get("timestamp", "") or "").startswith(today)]
+    scores = [_f(r, "threat_score") for r in todays if r.get("threat_score")]
+    alerts = sum(1 for r in todays
+                 if (r.get("threat_level", "") or "") in ("WARNING", "CRITICAL"))
+    return {
+        "today": len(todays),
+        "avg_score": round(sum(scores) / len(scores)) if scores else 0,
+        "peak_score": round(max(scores)) if scores else 0,
+        "alerts": alerts,
+    }
 
 
 def _f(row: dict, key: str, default: float = 0.0) -> float:
@@ -73,10 +107,169 @@ def _f(row: dict, key: str, default: float = 0.0) -> float:
         return default
 
 
+# ---- system health (real host metrics, standard-library only) ----------------
+# All best-effort and cross-platform: anything we can't read on this OS comes back
+# as None and renders "—" in the UI rather than a fabricated number. On the Pi
+# (Linux/ARM) all six are real; on a Windows dev box temp is usually unavailable.
+_PROC_START = time.time()
+_CPU_PREV: dict = {"idle": None, "total": None}   # for CPU% between successive polls
+
+
+def _cpu_percent():
+    """CPU utilization %, computed from the delta since the last call (non-blocking).
+    Returns None on the very first sample (no delta yet) or if unreadable."""
+    sysname = platform.system()
+    try:
+        if sysname == "Linux":
+            with open("/proc/stat") as f:
+                vals = [float(x) for x in f.readline().split()[1:]]
+            idle = vals[3] + (vals[4] if len(vals) > 4 else 0.0)   # idle + iowait
+            total = sum(vals)
+        elif sysname == "Windows":
+            idle_ft, kern_ft, user_ft = (ctypes.c_ulonglong() for _ in range(3))
+            ctypes.windll.kernel32.GetSystemTimes(ctypes.byref(idle_ft),
+                                                  ctypes.byref(kern_ft),
+                                                  ctypes.byref(user_ft))
+            idle = float(idle_ft.value)
+            total = float(kern_ft.value + user_ft.value)   # kernel time includes idle
+        else:
+            return min(100.0, os.getloadavg()[0] / (os.cpu_count() or 1) * 100)
+    except Exception:
+        return None
+    prev_idle, prev_total = _CPU_PREV["idle"], _CPU_PREV["total"]
+    _CPU_PREV["idle"], _CPU_PREV["total"] = idle, total
+    if prev_idle is None or prev_total is None:
+        return None
+    dt = total - prev_total
+    if dt <= 0:
+        return None
+    return max(0.0, min(100.0, (1.0 - (idle - prev_idle) / dt) * 100.0))
+
+
+def _mem_percent():
+    """(used %, total GB) of physical RAM, or (None, None)."""
+    sysname = platform.system()
+    try:
+        if sysname == "Linux":
+            info = {}
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    k, _, v = line.partition(":")
+                    info[k] = float(v.strip().split()[0])   # kB
+            total = info.get("MemTotal", 0.0)
+            avail = info.get("MemAvailable", info.get("MemFree", 0.0))
+            if total <= 0:
+                return None, None
+            return (1.0 - avail / total) * 100.0, total / 1048576.0
+        if sysname == "Windows":
+            class _MEM(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                            ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+            m = _MEM(); m.dwLength = ctypes.sizeof(_MEM)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m))
+            return float(m.dwMemoryLoad), m.ullTotalPhys / 1e9
+    except Exception:
+        return None, None
+    return None, None
+
+
+def _cpu_temp():
+    """CPU temperature in °C (Raspberry Pi / Linux thermal zone), or None.
+    Prefers a zone whose ``type`` names the CPU (Pi 5 = 'cpu-thermal'); falls back
+    to thermal_zone0. Reads are in milli-°C."""
+    base = "/sys/class/thermal"
+    try:
+        zones = [z for z in os.listdir(base) if z.startswith("thermal_zone")]
+    except OSError:
+        return None
+    # Try to pick the CPU zone by its declared type, else just use zone0.
+    ordered = []
+    for z in sorted(zones):
+        try:
+            with open(os.path.join(base, z, "type")) as f:
+                ztype = f.read().strip().lower()
+        except OSError:
+            ztype = ""
+        (ordered.insert(0, z) if ("cpu" in ztype or "soc" in ztype)
+         else ordered.append(z))
+    for z in ordered or ["thermal_zone0"]:
+        try:
+            with open(os.path.join(base, z, "temp")) as f:
+                milli = int(f.read().strip())
+            if milli > 0:
+                return round(milli / 1000.0, 1)
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def _disk_usage():
+    """(used %, total GB, free GB) for the repo's volume, or (None, None, None)."""
+    try:
+        du = shutil.disk_usage(REPO_ROOT)
+        return du.used / du.total * 100.0, du.total / 1e9, du.free / 1e9
+    except Exception:
+        return None, None, None
+
+
+def _uptime_seconds():
+    """System uptime in seconds, falling back to this process's uptime."""
+    sysname = platform.system()
+    try:
+        if sysname == "Linux":
+            with open("/proc/uptime") as f:
+                return float(f.read().split()[0])
+        if sysname == "Windows":
+            return ctypes.windll.kernel32.GetTickCount64() / 1000.0
+    except Exception:
+        pass
+    return time.time() - _PROC_START
+
+
+def _fmt_uptime(s) -> str:
+    if s is None:
+        return "—"
+    s = int(s)
+    d, s = divmod(s, 86400)
+    h, s = divmod(s, 3600)
+    m, _ = divmod(s, 60)
+    if d:
+        return f"{d}d {h}h"
+    if h:
+        return f"{h}h {m}m"
+    return f"{m}m"
+
+
+def _system_health() -> dict:
+    """Live host metrics for the System Health panel — all real, all stdlib."""
+    cpu = _cpu_percent()
+    mem_pct, mem_total = _mem_percent()
+    disk_pct, disk_total, disk_free = _disk_usage()
+    up = _uptime_seconds()
+    r1 = lambda v: None if v is None else round(v, 1)
+    return {
+        "cpu": r1(cpu),
+        "mem_pct": r1(mem_pct),
+        "mem_total_gb": r1(mem_total),
+        "temp_c": _cpu_temp(),
+        "disk_pct": r1(disk_pct),
+        "disk_total_gb": r1(disk_total),
+        "disk_free_gb": r1(disk_free),
+        "uptime_s": None if up is None else int(up),
+        "uptime": _fmt_uptime(up),
+        "platform": f"{platform.system()} {platform.machine()}".strip(),
+        "cores": os.cpu_count(),
+    }
+
+
 def _system_snapshot() -> dict:
     """Whole-system view derived honestly from the real detection stream: current
     threat, localization, and which sensors have actually contributed data."""
-    rows = _tail_detections(limit=40)
+    all_rows = _read_all()                       # read the CSV once per poll
+    rows = list(reversed(all_rows[-40:]))        # newest-first tail for the feed
     latest = rows[0] if rows else {}
 
     # Which vectors are live — inferred from populated fields in recent rows.
@@ -133,6 +326,8 @@ def _system_snapshot() -> dict:
         "sensors": sensors,
         "feed": rows[:20],
         "last_land": last_land,
+        "stream": _stream_status(),
+        "analytics": _analytics(all_rows),
         # NB: ssid intentionally NOT exposed here — it stays in the hidden panel.
         "armed": bool(CONFIG["ssid"].strip()),
         "target_configured": bool(CONFIG["ssid"].strip()),
@@ -151,10 +346,14 @@ def _drone_type(token: str) -> str:
     return "pluto"
 
 
-def _command_land() -> dict:
-    """Command the operator's OWN allow-listed drone to LAND. Routes to the right
-    control stack (Tello UDP SDK vs Pluto MSP) by SSID; own-drone + land-only."""
+def _command_land(method: str = "land") -> dict:
+    """Command the operator's OWN allow-listed drone down. Routes to the right
+    control stack (Tello UDP SDK vs Pluto MSP) by SSID; own-drone + land-only.
+
+    ``method="emergency"`` cuts the Tello's motors instantly instead of a
+    controlled descent (Tello only; Pluto falls back to its normal land)."""
     global _LAST_LAND
+    method = "emergency" if str(method).lower() == "emergency" else "land"
     token = CONFIG["ssid"].strip() or "PLUTO"
     drone = _drone_type(token)
     try:
@@ -163,7 +362,7 @@ def _command_land() -> dict:
             td = TelloDefence(authorized=[token], enabled=True,
                               force_mock=CONFIG["force_mock"])
             verdict = {"wifi_hits": [{"ssid": token, "model": token}]}
-            result = td.engage(verdict)
+            result = td.engage(verdict, method=method)
             td.close()
         else:
             os.environ["PLUTO_HOST"] = CONFIG["host"]
@@ -181,8 +380,9 @@ def _command_land() -> dict:
 
     stamp = time.strftime("%Y-%m-%d %H:%M:%S")
     action = result.get("action", "error")
-    if action == "land":
-        detail = (f"LAND commanded to '{result.get('target', token)}' "
+    if action in ("land", "emergency"):
+        verb = "EMERGENCY (motor cutoff)" if action == "emergency" else "LAND"
+        detail = (f"{verb} commanded to '{result.get('target', token)}' "
                   f"via {result.get('mode', '?')}"
                   + ("" if result.get("sent") else " (mock — no drone reachable)"))
     elif action == "none":
@@ -217,6 +417,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, PAGE.encode("utf-8"), "text/html; charset=utf-8")
         elif self.path.startswith("/api/status"):
             self._json(_system_snapshot())
+        elif self.path.startswith("/api/system"):
+            self._json(_system_health())
         elif self.path.startswith("/api/config"):
             # Return only non-secret host/port; SSID stays server-side by design.
             self._json({"host": CONFIG["host"], "port": CONFIG["port"],
@@ -233,7 +435,8 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             data = {}
         if self.path.startswith("/api/land"):
-            self._json(_command_land())
+            method = "emergency" if data.get("emergency") else "land"
+            self._json(_command_land(method))
         elif self.path.startswith("/api/config"):
             if "ssid" in data:
                 CONFIG["ssid"] = str(data["ssid"])
@@ -302,6 +505,22 @@ PAGE = r"""<!DOCTYPE html>
     background:var(--dim);box-shadow:0 0 0 0 transparent}
   .sensor.on .dot{background:var(--ok);box-shadow:0 0 10px var(--ok)}
   .sensor .n{font-size:12px} .sensor .d{color:var(--dim);font-size:11px;margin-top:3px}
+
+  /* system health strip */
+  .health{display:grid;grid-template-columns:repeat(6,1fr);gap:8px}
+  .hm{border:1px solid var(--line);border-radius:9px;padding:11px 8px;background:var(--panel2);text-align:center}
+  .hm .k{display:block;font-size:9px;letter-spacing:.14em;color:var(--dim);text-transform:uppercase}
+  .hm b{display:block;font-size:19px;margin-top:5px;font-variant-numeric:tabular-nums;font-weight:600}
+  .hm b.sm{font-size:13px;font-weight:500}
+  .hm b.ok{color:var(--ok)} .hm b.warn{color:var(--warn)} .hm b.crit{color:var(--crit)}
+  @media(max-width:760px){.health{grid-template-columns:repeat(3,1fr)}}
+
+  /* small status pill in a card header (e.g. detector stream heartbeat) */
+  .st{float:right;font-size:9px;letter-spacing:.08em;color:var(--dim);text-transform:none;font-weight:500}
+  .st .d{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--dim);
+    margin-right:5px;vertical-align:middle}
+  .st.on .d{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+  .st.off .d{background:var(--crit)}
 
   /* land control */
   .landcard{text-align:center}
@@ -372,6 +591,7 @@ PAGE = r"""<!DOCTYPE html>
         <div>
           <div class="lvl SAFE" id="level">SAFE</div>
           <div class="meta">source <b id="src">-</b></div>
+          <div class="meta">vectors <b id="agree">—</b></div>
           <div class="meta">id <b id="fp">-</b></div>
           <div class="meta" id="ts">-</div>
         </div>
@@ -396,8 +616,30 @@ PAGE = r"""<!DOCTYPE html>
 
   <div class="col">
     <div class="card">
+      <h2>System Health</h2>
+      <div class="health" id="health">
+        <div class="hm"><span class="k">CPU</span><b id="h-cpu">—</b></div>
+        <div class="hm"><span class="k">RAM</span><b id="h-ram">—</b></div>
+        <div class="hm"><span class="k">Temp</span><b id="h-temp">—</b></div>
+        <div class="hm"><span class="k">Disk</span><b id="h-disk">—</b></div>
+        <div class="hm"><span class="k">Uptime</span><b id="h-up" class="sm">—</b></div>
+        <div class="hm"><span class="k">Platform</span><b id="h-plat" class="sm">—</b></div>
+      </div>
+    </div>
+    <div class="card">
       <h2>Sensor Fusion Grid</h2>
       <div class="sensors" id="sensors"></div>
+    </div>
+    <div class="card">
+      <h2>Today
+        <span class="st" id="stream"><span class="d"></span><span id="streamlbl">—</span></span>
+      </h2>
+      <div class="health" style="grid-template-columns:repeat(4,1fr)">
+        <div class="hm"><span class="k">Detections</span><b id="a-today">0</b></div>
+        <div class="hm"><span class="k">Alerts</span><b id="a-alerts">0</b></div>
+        <div class="hm"><span class="k">Avg Score</span><b id="a-avg">0</b></div>
+        <div class="hm"><span class="k">Peak Score</span><b id="a-peak">0</b></div>
+      </div>
     </div>
     <div class="card">
       <h2>Live Detection Feed</h2>
@@ -452,11 +694,30 @@ async function refresh(){
   $('elv').textContent=f.el?(Math.round(f.el)+'°'):'—';
   $('rng').textContent=f.range_m?(f.range_m+' m'):'—';
 
-  $('sensors').innerHTML=s.sensors.map(x=>`
+  const sensors=s.sensors||[];
+  $('sensors').innerHTML=sensors.map(x=>`
     <div class="sensor ${x.active?'on':''}">
       <div class="n"><span class="dot"></span>${x.name}</div>
       <div class="d">${x.detail||'—'}</div>
     </div>`).join('');
+
+  // vectors: honest count of how many sensors are actually contributing
+  const act=sensors.filter(x=>x.active);
+  $('agree').textContent = sensors.length
+    ? act.length+'/'+sensors.length+(act.length?(' · '+act.map(x=>x.name.split(' ')[0]).join(', ')):'')
+    : '—';
+
+  // detector heartbeat + today's tally
+  const sm=s.stream||{}, st=$('stream');
+  st.className='st '+(sm.live?'on':'off');$('streamlbl').textContent=sm.label||'—';
+  const an=s.analytics||{};
+  $('a-today').textContent=an.today||0;
+  $('a-alerts').textContent=an.alerts||0;
+  $('a-avg').textContent=an.avg_score||0;
+  $('a-peak').textContent=an.peak_score||0;
+  $('a-alerts').className=an.alerts>0?'warn':'';
+  $('a-avg').className=an.avg_score>=60?'crit':(an.avg_score>=35?'warn':'');
+  $('a-peak').className=an.peak_score>=60?'crit':(an.peak_score>=35?'warn':'');
 
   const feed=s.feed||[];
   $('feed').innerHTML = feed.length? feed.map(r=>`
@@ -473,6 +734,25 @@ async function refresh(){
   }
 }
 setInterval(refresh,1200);refresh();
+
+/* ---- system health strip (real host metrics from /api/system) ---- */
+function hcls(v,warn,crit){return v==null?'':(v>=crit?'crit':(v>=warn?'warn':'ok'));}
+async function refreshHealth(){
+  let h; try{h=await (await fetch('/api/system')).json();}catch(e){return;}
+  const set=(id,txt,cls,keepSm)=>{const el=$(id);el.textContent=txt;
+    el.className=(keepSm?'sm ':'')+(cls||'');};
+  const pct=v=>v==null?'—':Math.round(v)+'%';
+  set('h-cpu', pct(h.cpu),  hcls(h.cpu,60,85));
+  set('h-ram', pct(h.mem_pct), hcls(h.mem_pct,75,90));
+  set('h-temp',h.temp_c==null?'—':Math.round(h.temp_c)+'°C', hcls(h.temp_c,65,78));
+  set('h-disk',pct(h.disk_pct), hcls(h.disk_pct,80,92));
+  set('h-up',  h.uptime||'—', '', true);
+  set('h-plat',h.platform||'—','', true);
+  $('h-ram').title = h.mem_total_gb?('total '+h.mem_total_gb+' GB'):'';
+  $('h-disk').title = (h.disk_free_gb!=null)?(h.disk_free_gb+' GB free of '+h.disk_total_gb+' GB'):'';
+  $('h-cpu').title = h.cores?(h.cores+' cores'):'';
+}
+setInterval(refreshHealth,3000);refreshHealth();
 
 /* ---- land button: tap to arm, tap again to execute ---- */
 let armed=false,armTimer=null,landBusy=false;

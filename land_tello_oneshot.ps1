@@ -10,7 +10,8 @@
   Own-drone, land-only, allow-list gated to the Tello SSID.
 #>
 param(
-  [string]$DroneSsid = 'TELLO-954B1F'
+  [string]$DroneSsid = 'TELLO-954B1F',
+  [switch]$Emergency   # cut motors instantly instead of a controlled land (drone drops)
 )
 $ErrorActionPreference = 'Stop'
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -59,10 +60,14 @@ try {
   $joined = $false
   for ($i = 0; $i -lt 25; $i++) { Start-Sleep -Seconds 2; if ((Get-CurrentSsid) -eq $DroneSsid) { $joined = $true; break } }
   if (-not $joined) { throw "Could not join $DroneSsid (is the Tello on?)" }
-  Write-Host "Link seized. Sending LAND..." -ForegroundColor Green
-
   Push-Location $RepoRoot
-  python -m ml.runtime.tello_control --enabled --authorized $DroneSsid --ssid $DroneSsid
+  if ($Emergency) {
+    Write-Host "Link seized. Sending EMERGENCY (motor cutoff)..." -ForegroundColor Red
+    python -m ml.runtime.tello_control --enabled --authorized $DroneSsid --ssid $DroneSsid --emergency
+  } else {
+    Write-Host "Link seized. Sending LAND..." -ForegroundColor Green
+    python -m ml.runtime.tello_control --enabled --authorized $DroneSsid --ssid $DroneSsid
+  }
   Pop-Location
 }
 finally {
